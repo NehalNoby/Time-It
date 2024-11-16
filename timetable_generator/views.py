@@ -1,11 +1,11 @@
 from django.shortcuts import render
 from django.http import HttpResponse
 from rest_framework.generics import GenericAPIView
-from.serializers import StudentSerializer,LoginSerializer,FacultySerializer,DepartmentSerializer,SemesterSerializer,SubjectSerializer
+from.serializers import StudentSerializer,LoginSerializer,FacultySerializer,DepartmentSerializer,SemesterSerializer,SubjectSerializer,AdminSettingsSerializer
 from rest_framework.response import Response
 from rest_framework import status
 from . models import Student
-from . models import Login,Faculty,Department,Semester,Subject,SubjectTypeChoices
+from . models import Login,Faculty,Department,Semester,Subject,SubjectTypeChoices,AdminSettings
 from itertools import chain
 import json
 # Create your views here.
@@ -407,4 +407,52 @@ class subject_delete(GenericAPIView):
         subjects=Subjects.objects.get(pk=id)
         subjects.delete()
         return Response('Subjects deleted successfully')
+
+#manageadminsettings
+class adminsettings_reg(GenericAPIView):
+    def get_serializer_class(self):
+        return AdminSettingsSerializer
+    def post(self,request):
+        ads_name=request.data.get('ads_name')
+        ads_serializer=AdminSettingsSerializer(
+        data={
+            'no_of_workingdays':no_of_workingdays,
+            'no_of_hours_in_a_day':no_of_hours_in_a_day,})
+        if ads_serializer.is_valid():
+            ads_serializer.save()
+            return Response({'message':'AdminSettings added Successfull'},status=status.HTTP_200_OK,)
+        else:
+            return Response({'message':'AdminSettings adding Failed'},status=status.HTTP_400_BAD_REQUEST,)                  
+
+
+class view_adminsettingss(GenericAPIView):
+    serializer_class=AdminSettingsSerializer
+    def get(self,request):
+        adminsettings=AdminSettings.objects.all()
+        if adminsettings.count()>0:
+            serializerads=AdminSettingsSerializer(adminsettings,many=True)
+            return Response({'data':serializerads.data,'message':'Data fetched','Success':True},status=status.HTTP_200_OK)
+        else:
+            return Response({'data':'No data available'},status=status.HTTP_400_BAD_REQUEST)
+
+class update_adminsettings(GenericAPIView):
+    serializer_class=AdminSettingsSerializer
+
+    def put(self,request,id):
+        adminsettings=AdminSettings.objects.get(pk=id)
+        serializerads=AdminSettingsSerializer(instance=adminsettings,data=request.data,partial=True)
+
+        if serializerads.is_valid():
+            serializerads.save()
+            return Response({'data':serializerads.data,'message':'AdminSettings Updated Successfully','success':True},status=status.HTTP_200_OK)
+
+        return Response(serializerads.errors,status=status.HTTP_400_BAD_REQUEST)
+
+class adminsettings_delete(GenericAPIView):
+    serializer_class=AdminSettingsSerializer
+
+    def delete(self,request,id):
+        adminsettings=AdminSettings.objects.get(pk=id)
+        adminsettings.delete()
+        return Response('AdminSettings deleted successfully')
 

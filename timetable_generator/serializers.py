@@ -31,3 +31,8 @@ class SubjectSerializer(serializers.ModelSerializer):
     class Meta:
         model=Subject
         fields='__all__'
+
+class AdminSettingsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model=AdminSettings
+        fields='__all__'

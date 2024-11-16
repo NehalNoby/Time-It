@@ -1,0 +1,54 @@
+# Byte-compiled / optimized / DLL files
+_pycache_/
+*.py[cod]
+*$py.class
+
+# Django specific files
+db.sqlite3
+*.sqlite3
+*.log
+*.pot
+*.pyc
+*.pyo
+*.pyd
+
+# Environment variables
+.env
+.env.*
+
+# Virtual environment
+venv/
+.env/
+venv.bak/
+
+# Django static and media folders
+staticfiles/
+media/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# VS Code settings
+.vscode/
+.vscode/settings.json
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Pipfile.lock (if using Pipenv)
+Pipfile.lock
+
+# Pytest cache
+.pytest_cache/
+
+# Coverage reports
+htmlcov/
+.coverage
+
+# mypy cache
+.mypy_cache/
+
+# Pyre type checker
+.pyre/
+**migrations

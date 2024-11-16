@@ -38,4 +38,10 @@ urlpatterns = [
    path('subjectupdate/<int:id>',views.update_subject.as_view()),
    path('subjectdelete/<int:id>',views.subject_delete.as_view()),
 
+#adminsettings
+   path('adminsettingsregistration/',views.adminsettings_reg.as_view()),
+   path('viewadminsettings/',views.view_adminsettings.as_view()),
+   path('adminsettingsupdate/<int:id>',views.update_adminsettings.as_view()),
+   path('adminsettingsdelete/<int:id>',views.adminsettings_delete.as_view()),
+
 ]

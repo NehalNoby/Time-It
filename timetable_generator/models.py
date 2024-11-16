@@ -64,14 +64,22 @@ class Student(models.Model):
 
     login_id=models.OneToOneField(Login,on_delete=models.CASCADE,default="100")
 
-
-
-
-
+class AdminSettings(models.Model):
+    no_of_workingdays=models.IntegerField(default=0)
+    no_of_hours_in_a_day=models.IntegerField(default=0)
 
 
 class Semester(models.Model):
     sem_name=models.CharField(max_length=40)
+    department=models.ForeignKey(Department,on_delete=models.SET_NULL,null=True)
+    no_of_subjects=models.IntegerField(default=4)
+    available_subjects=models.ManyToManyField(Subject,blank=True)
+    no_of_hours_for_major=models.IntegerField(default=0)
+    no_of_hours_for_minor1=models.IntegerField(default=0)
+    no_of_hours_for_minor2=models.IntegerField(default=0)
+    no_of_hours_for_aec1=models.IntegerField(default=0)
+    no_of_hours_for_aec2=models.IntegerField(default=0)
+    no_of_hours_for_mdc=models.IntegerField(default=0)
 
     def __str__(self):
         return self.sem_name

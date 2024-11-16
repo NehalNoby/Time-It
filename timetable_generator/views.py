@@ -8,10 +8,54 @@ from . models import Student
 from . models import Login,Faculty,Department,Semester,Subject,SubjectTypeChoices,AdminSettings
 from itertools import chain
 import json
+import random
+
 # Create your views here.
 def index(request):
     return HttpResponse("asdfghj")
     
+
+class GenerateTimeTableAPIView(GenericAPIView):
+    serializer_class = StudentSerializer
+
+    def get(self, request):
+        departments = Department.objects.all()
+        timetable_data = {}
+
+        for department in departments:
+            semesters = department.semesters.all()
+            timetable_data[department.name] = {}
+
+            for semester in semesters:
+                timetable = [['' for _ in range(5)] for _ in range(5)]  
+
+                teachers = Faculty.objects.filter(department=department, subjects__semester=semester).distinct()
+                subjects = Subject.objects.filter(semester=semester)
+
+                for day in range(5):
+                    available_teachers = list(teachers)
+                    for hour in range(5):
+                        if available_teachers and subjects:
+                            selected_teacher = random.choice(available_teachers)
+                            subject = random.choice(subjects.filter(teacher=selected_teacher))
+
+                            timetable[day][hour] = {
+                                'teacher': selected_teacher.name,
+                                'subject': subject.name,
+                                'semester': semester.name
+                            }
+                            available_teachers.remove(selected_teacher)
+
+                timetable_data[department.name][semester.name] = timetable
+
+        return Response(
+            {'data': timetable_data, 'message': 'Timetable generated', 'Success': True},
+            status=status.HTTP_200_OK
+        )
+
+
+
+
 class student_reg(GenericAPIView):
     serializer_class=StudentSerializer
 

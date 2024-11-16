@@ -37,6 +37,7 @@ urlpatterns = [
    path('viewsubjects/',views.view_subjects.as_view()),
    path('subjectupdate/<int:id>',views.update_subject.as_view()),
    path('subjectdelete/<int:id>',views.subject_delete.as_view()),
+   path('generate-timetable/',views.GenerateTimeTableAPIView.as_view()),
 
 #adminsettings
    path('adminsettingsregistration/',views.adminsettings_reg.as_view()),

@@ -50,7 +50,7 @@ class Subject(models.Model):
     subject_code=models.CharField(max_length=40)
 
     def __str__(self):
-        return f"{self.department.dept_name}-{self.subject_name} -{self.subject_type}" 
+        return f"{self.department.dept_name if self.department else ''}-{self.subject_name} -{self.subject_type}" 
 
 class Student(models.Model):
     name=models.CharField(max_length=40)

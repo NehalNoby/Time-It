@@ -16,43 +16,93 @@ def index(request):
     
 
 class GenerateTimeTableAPIView(GenericAPIView):
-    serializer_class = StudentSerializer
 
     def get(self, request):
-        departments = Department.objects.all()
-        timetable_data = {}
+        semesters = Semester.objects.all()
+        working_days = 5 
+        periods_per_day = 5 
 
-        for department in departments:
-            semesters = department.semesters.all()
-            timetable_data[department.name] = {}
+        teachers_subjects_map = {}
+        teacher_availability = {}
 
-            for semester in semesters:
-                timetable = [['' for _ in range(5)] for _ in range(5)]  
+        for semester in semesters:
+            subjects = semester.available_subjects.all()
+            teachers_subjects_map[semester.sem_name] = []
+            for subject in subjects:
+                if subject.staff:
+                    teachers_subjects_map[semester.sem_name].append({
+                        "teacher": subject.staff.name,
+                        "subject": subject.subject_name,
+                        "subject_code": subject.subject_code,
+                        "department": subject.department.dept_name,
+                        "staff_id": subject.staff.staff_id,
+                        "type": subject.subject_type,
+                    })
 
-                teachers = Faculty.objects.filter(department=department, subjects__semester=semester).distinct()
-                subjects = Subject.objects.filter(semester=semester)
+        for semester in semesters:
+            for subject in semester.available_subjects.all():
+                if subject.staff:
+                    staff_id = subject.staff.staff_id
+                    if staff_id not in teacher_availability:
+                        teacher_availability[staff_id] = {
+                            f"Day {day + 1}": [False] * periods_per_day for day in range(working_days)
+                        }
 
-                for day in range(5):
-                    available_teachers = list(teachers)
-                    for hour in range(5):
-                        if available_teachers and subjects:
-                            selected_teacher = random.choice(available_teachers)
-                            subject = random.choice(subjects.filter(teacher=selected_teacher))
-
-                            timetable[day][hour] = {
-                                'teacher': selected_teacher.name,
-                                'subject': subject.name,
-                                'semester': semester.name
-                            }
-                            available_teachers.remove(selected_teacher)
-
-                timetable_data[department.name][semester.name] = timetable
-
-        return Response(
-            {'data': timetable_data, 'message': 'Timetable generated', 'Success': True},
-            status=status.HTTP_200_OK
+        timetable = self.generate_timetable(
+            [semester.sem_name for semester in semesters],
+            working_days,
+            periods_per_day,
+            teachers_subjects_map,
+            teacher_availability
         )
 
+        return Response({
+            "data": timetable,
+            "message": "Timetable generated successfully",
+            "success": True
+        })
+
+    def generate_timetable(self, semesters, working_days, periods_per_day, teachers_subjects_map, teacher_availability):
+        timetable = {}
+
+        for semester in semesters:
+            timetable[semester] = {}
+            for day in range(working_days):
+                daily_schedule = []
+                assigned_subjects_for_day = set()
+
+                for period in range(periods_per_day):
+                    available_subjects = teachers_subjects_map.get(semester, []).copy()
+                    assigned = False
+
+                    while available_subjects and not assigned:
+                        subject = random.choice(available_subjects)
+                        teacher = subject["teacher"]
+                        staff_id = subject["staff_id"]
+                        subject_name = subject["subject"]
+                        subject_type = subject["type"]
+
+                        if (not teacher_availability[staff_id][f"Day {day + 1}"][period] and
+                            subject_name not in assigned_subjects_for_day):
+
+                            teacher_availability[staff_id][f"Day {day + 1}"][period] = True
+                            daily_schedule.append({
+                                "teacher": teacher,
+                                "subject": subject["subject"],
+                                "subject_code": subject["subject_code"],
+                                "semester": semester,
+                                "subject_type":subject_type,
+                            })
+                            assigned_subjects_for_day.add(subject_name)
+                            assigned = True
+                        else:
+                            available_subjects.remove(subject)
+
+                    if not assigned:
+                        daily_schedule.append([])
+
+                timetable[semester][f"Day {day + 1}"] = daily_schedule
+        return timetable
 
 
 

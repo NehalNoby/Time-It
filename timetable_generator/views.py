@@ -425,7 +425,7 @@ class adminsettings_reg(GenericAPIView):
             return Response({'message':'AdminSettings adding Failed'},status=status.HTTP_400_BAD_REQUEST,)                  
 
 
-class view_adminsettingss(GenericAPIView):
+class view_adminsettings(GenericAPIView):
     serializer_class=AdminSettingsSerializer
     def get(self,request):
         adminsettings=AdminSettings.objects.all()

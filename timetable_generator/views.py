@@ -18,9 +18,14 @@ def index(request):
 class GenerateTimeTableAPIView(GenericAPIView):
 
     def get(self, request):
+        settings=AdminSettings.objects.all()
         semesters = Semester.objects.all()
-        working_days = 5 
-        periods_per_day = 5 
+        if settings.exists():
+            working_days =settings.first().no_of_workingdays
+            periods_per_day =settings.first().no_of_hours_in_a_day
+        else:
+            working_days = 5 
+            periods_per_day = 5 
 
         teachers_subjects_map = {}
         teacher_availability = {}

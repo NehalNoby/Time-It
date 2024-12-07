@@ -7,32 +7,44 @@ from rest_framework import status
 from . models import Student
 from . models import Login,Faculty,Department,Semester,Subject,SubjectTypeChoices,AdminSettings
 from itertools import chain
+from rest_framework.views import APIView
 import json
 import random
 
 # Create your views here.
 def index(request):
     return HttpResponse("asdfghj")
-    
+
 
 class GenerateTimeTableAPIView(GenericAPIView):
 
     def get(self, request):
-        settings=AdminSettings.objects.all()
+        settings = AdminSettings.objects.all()
         semesters = Semester.objects.all()
+
         if settings.exists():
-            working_days =settings.first().no_of_workingdays
-            periods_per_day =settings.first().no_of_hours_in_a_day
+            working_days = settings.first().no_of_workingdays
+            periods_per_day = settings.first().no_of_hours_in_a_day
         else:
-            working_days = 5 
-            periods_per_day = 5 
+            working_days = 5
+            periods_per_day = 5
 
         teachers_subjects_map = {}
         teacher_availability = {}
+        subject_hours_map = {}
 
         for semester in semesters:
             subjects = semester.available_subjects.all()
             teachers_subjects_map[semester.sem_name] = []
+            subject_hours_map[semester.sem_name] = {
+                SubjectTypeChoices.MAJOR: semester.no_of_hours_for_major,
+                SubjectTypeChoices.MINOR1: semester.no_of_hours_for_minor1,
+                SubjectTypeChoices.MINOR2: semester.no_of_hours_for_minor2,
+                SubjectTypeChoices.AEC1: semester.no_of_hours_for_aec1,
+                SubjectTypeChoices.AEC2: semester.no_of_hours_for_aec2,
+                SubjectTypeChoices.MDC: semester.no_of_hours_for_mdc,
+            }
+            
             for subject in subjects:
                 if subject.staff:
                     teachers_subjects_map[semester.sem_name].append({
@@ -58,7 +70,8 @@ class GenerateTimeTableAPIView(GenericAPIView):
             working_days,
             periods_per_day,
             teachers_subjects_map,
-            teacher_availability
+            teacher_availability,
+            subject_hours_map
         )
 
         return Response({
@@ -67,17 +80,23 @@ class GenerateTimeTableAPIView(GenericAPIView):
             "success": True
         })
 
-    def generate_timetable(self, semesters, working_days, periods_per_day, teachers_subjects_map, teacher_availability):
+    def generate_timetable(self, semesters, working_days, periods_per_day, teachers_subjects_map, teacher_availability, subject_hours_map):
         timetable = {}
 
         for semester in semesters:
             timetable[semester] = {}
+            subject_hour_tracker = {k: 0 for k in subject_hours_map[semester]}
+            total_hours_needed = sum(subject_hours_map[semester].values())
+
+            if total_hours_needed != working_days * periods_per_day:
+                raise ValueError(f"Mismatch in total hours ({total_hours_needed}) and available periods ({working_days * periods_per_day}) for semester {semester}.")
+
             for day in range(working_days):
                 daily_schedule = []
                 assigned_subjects_for_day = set()
 
                 for period in range(periods_per_day):
-                    available_subjects = teachers_subjects_map.get(semester, []).copy()
+                    available_subjects = [s for s in teachers_subjects_map.get(semester, []) if subject_hour_tracker[s["type"]] < subject_hours_map[semester][s["type"]]]
                     assigned = False
 
                     while available_subjects and not assigned:
@@ -87,26 +106,50 @@ class GenerateTimeTableAPIView(GenericAPIView):
                         subject_name = subject["subject"]
                         subject_type = subject["type"]
 
+                        # Check if the subject can still be scheduled based on its hours
                         if (not teacher_availability[staff_id][f"Day {day + 1}"][period] and
                             subject_name not in assigned_subjects_for_day):
 
                             teacher_availability[staff_id][f"Day {day + 1}"][period] = True
                             daily_schedule.append({
                                 "teacher": teacher,
-                                "subject": subject["subject"],
+                                "subject": subject_name,
                                 "subject_code": subject["subject_code"],
                                 "semester": semester,
-                                "subject_type":subject_type,
+                                "subject_type": subject_type,
                             })
                             assigned_subjects_for_day.add(subject_name)
+                            subject_hour_tracker[subject_type] += 1
                             assigned = True
                         else:
                             available_subjects.remove(subject)
 
                     if not assigned:
-                        daily_schedule.append([])
+                        # Fallback: Assign any remaining subject
+                        fallback_subjects = [s for s in teachers_subjects_map.get(semester, []) if subject_hour_tracker[s["type"]] < subject_hours_map[semester][s["type"]]]
+                        for subject in fallback_subjects:
+                            subject_type = subject["type"]
+                            staff_id = subject["staff_id"]
+                            subject_name = subject["subject"]
+
+                            if not teacher_availability[staff_id][f"Day {day + 1}"][period]:
+                                teacher_availability[staff_id][f"Day {day + 1}"][period] = True
+                                daily_schedule.append({
+                                    "teacher": subject["teacher"],
+                                    "subject": subject_name,
+                                    "subject_code": subject["subject_code"],
+                                    "semester": semester,
+                                    "subject_type": subject_type,
+                                })
+                                subject_hour_tracker[subject_type] += 1
+                                assigned = True
+                                break
+
+                    if not assigned:
+                        raise ValueError(f"Unable to assign subject for period {period + 1} on Day {day + 1} in semester {semester}.")
 
                 timetable[semester][f"Day {day + 1}"] = daily_schedule
+
         return timetable
 
 

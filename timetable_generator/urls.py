@@ -20,6 +20,14 @@ urlpatterns = [
    path('facultyupdate/<int:login_id>',views.update_faculties.as_view()),
    path('facultydelete/<int:login_id>',views.faculty_delete.as_view()),
 
+
+#college
+   path('collegeregistration/',views.college_reg.as_view()),
+   path('viewcollege/',views.view_college.as_view()),
+   path('collegeupdate/<int:id>',views.update_college.as_view()),
+   path('collegedelete/<int:id>',views.college_delete.as_view()),
+
+
 #department
    path('departmentregistration/',views.department_reg.as_view()),
    path('viewdepartments/',views.view_departments.as_view()),

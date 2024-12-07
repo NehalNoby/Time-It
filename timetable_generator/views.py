@@ -1,11 +1,11 @@
 from django.shortcuts import render
 from django.http import HttpResponse
 from rest_framework.generics import GenericAPIView
-from.serializers import StudentSerializer,LoginSerializer,FacultySerializer,DepartmentSerializer,SemesterSerializer,SubjectSerializer,AdminSettingsSerializer
+from.serializers import StudentSerializer,LoginSerializer,FacultySerializer,CollegeSerializer,DepartmentSerializer,SemesterSerializer,SubjectSerializer,AdminSettingsSerializer
 from rest_framework.response import Response
 from rest_framework import status
 from . models import Student
-from . models import Login,Faculty,Department,Semester,Subject,SubjectTypeChoices,AdminSettings
+from . models import Login,Faculty,College,Department,Semester,Subject,SubjectTypeChoices,AdminSettings
 from itertools import chain
 from rest_framework.views import APIView
 import json
@@ -381,6 +381,56 @@ class faculty_delete(GenericAPIView):
         return Response('Faculty deleted successfully')   
 
 
+#college
+class college_reg(GenericAPIView):
+    def get(self, request, code):
+        try:
+            college = College.objects.prefetch_related('departments').get(code=code)
+        except College.DoesNotExist:
+            raise NotFound("College with the given code does not exist.")
+
+        data = {
+            "name": college.name,
+            "location": college.location,
+            "established_year": college.established_year,
+            "contact_email": college.contact_email,
+            "departments": [{"id": dept.id, "name": dept.dept_name} for dept in college.departments.all()],
+        }
+        return Response(data)
+
+class view_college(GenericAPIView):
+    serializer_class=CollegeSerializer
+
+    def get(self,request):
+        college=College.objects.all()
+        if college.count()>0:
+            serializercollege=CollegeSerializer(college,many=True)
+            return Response({'data':serializercollege.data,'message':'Data fetched','Success':True},status=status.HTTP_200_OK)
+
+        else:
+            return Response({'data':'No data available'},status=status.HTTP_400_BAD_REQUEST)
+
+class update_college(GenericAPIView):
+    serializer_class=CollegeSerializer
+
+    def put(self,request,id):
+        college=College.objects.get(pk=id)
+        serializercollege=CollegeSerializer(instance=college,data=request.data,partial=True)
+
+        if serializercollege.is_valid():
+            serializercollege.save()
+            return Response({'data':serializercollege.data,'message':'College Updated Successfully','success':True},status=status.HTTP_200_OK)
+
+        return Response(serializercollege.errors,status=status.HTTP_400_BAD_REQUEST)
+
+class college_delete(GenericAPIView):
+    serializer_class=CollegeSerializer
+
+    def delete(self,request,id):
+        college=Colleget.objects.get(pk=id)
+        college.delete()
+
+        return Response('Department deleted successfully')  
 
 
 #managedepartment

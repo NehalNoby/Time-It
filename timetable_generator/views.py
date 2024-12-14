@@ -1,11 +1,11 @@
 from django.shortcuts import render
 from django.http import HttpResponse
 from rest_framework.generics import GenericAPIView
-from.serializers import StudentSerializer,LoginSerializer,FacultySerializer,CollegeSerializer,DepartmentSerializer,SemesterSerializer,SubjectSerializer,AdminSettingsSerializer
+from.serializers import StudentSerializer,LoginSerializer,FacultySerializer,CollegeSerializer,DepartmentSerializer,SemesterSerializer,SubjectSerializer,AdminSettingsSerializer,SubjectTypeChoicesSerializer,NumberofhourSerializer
 from rest_framework.response import Response
 from rest_framework import status
 from . models import Student
-from . models import Login,Faculty,College,Department,Semester,Subject,SubjectTypeChoices,AdminSettings
+from . models import Login,Faculty,College,Department,Semester,Subject,SubjectTypeChoice,AdminSettings,Number_of_hour
 from itertools import chain
 from rest_framework.views import APIView
 import json
@@ -19,12 +19,12 @@ def index(request):
 class GenerateTimeTableAPIView(GenericAPIView):
 
     def get(self, request):
-        settings = AdminSettings.objects.all()
+        settings = AdminSettings.objects.first()
         semesters = Semester.objects.all()
 
-        if settings.exists():
-            working_days = settings.first().no_of_workingdays
-            periods_per_day = settings.first().no_of_hours_in_a_day
+        if settings:
+            working_days = settings.no_of_workingdays
+            periods_per_day = settings.no_of_hours_in_a_day
         else:
             working_days = 5
             periods_per_day = 5
@@ -36,24 +36,23 @@ class GenerateTimeTableAPIView(GenericAPIView):
         for semester in semesters:
             subjects = semester.available_subjects.all()
             teachers_subjects_map[semester.sem_name] = []
-            subject_hours_map[semester.sem_name] = {
-                SubjectTypeChoices.MAJOR: semester.no_of_hours_for_major,
-                SubjectTypeChoices.MINOR1: semester.no_of_hours_for_minor1,
-                SubjectTypeChoices.MINOR2: semester.no_of_hours_for_minor2,
-                SubjectTypeChoices.AEC1: semester.no_of_hours_for_aec1,
-                SubjectTypeChoices.AEC2: semester.no_of_hours_for_aec2,
-                SubjectTypeChoices.MDC: semester.no_of_hours_for_mdc,
-            }
-            
+            subject_hours_map[semester.sem_name] = {}
+
+            # Populate subject hours based on Number_of_hour
+            subject_types = SubjectTypeChoice.objects.all()
+            for subject_type in subject_types:
+                hours_entry = Number_of_hour.objects.filter(subject_type=subject_type, semester=semester).first()
+                subject_hours_map[semester.sem_name][subject_type.subject_types] = hours_entry.no_of_hours_for_subject if hours_entry else 0
+
             for subject in subjects:
                 if subject.staff:
                     teachers_subjects_map[semester.sem_name].append({
                         "teacher": subject.staff.name,
                         "subject": subject.subject_name,
                         "subject_code": subject.subject_code,
-                        "department": subject.department.dept_name,
+                        "department": subject.department.dept_name if subject.department else None,
                         "staff_id": subject.staff.staff_id,
-                        "type": subject.subject_type,
+                        "type": subject.subject_type.subject_types if subject.subject_type else "Unknown",
                     })
 
         for semester in semesters:
@@ -96,7 +95,10 @@ class GenerateTimeTableAPIView(GenericAPIView):
                 assigned_subjects_for_day = set()
 
                 for period in range(periods_per_day):
-                    available_subjects = [s for s in teachers_subjects_map.get(semester, []) if subject_hour_tracker[s["type"]] < subject_hours_map[semester][s["type"]]]
+                    available_subjects = [
+                        s for s in teachers_subjects_map.get(semester, []) \
+                        if subject_hour_tracker[s["type"]] < subject_hours_map[semester][s["type"]]
+                    ]
                     assigned = False
 
                     while available_subjects and not assigned:
@@ -106,7 +108,6 @@ class GenerateTimeTableAPIView(GenericAPIView):
                         subject_name = subject["subject"]
                         subject_type = subject["type"]
 
-                        # Check if the subject can still be scheduled based on its hours
                         if (not teacher_availability[staff_id][f"Day {day + 1}"][period] and
                             subject_name not in assigned_subjects_for_day):
 
@@ -125,8 +126,10 @@ class GenerateTimeTableAPIView(GenericAPIView):
                             available_subjects.remove(subject)
 
                     if not assigned:
-                        # Fallback: Assign any remaining subject
-                        fallback_subjects = [s for s in teachers_subjects_map.get(semester, []) if subject_hour_tracker[s["type"]] < subject_hours_map[semester][s["type"]]]
+                        fallback_subjects = [
+                            s for s in teachers_subjects_map.get(semester, []) \
+                            if subject_hour_tracker[s["type"]] < subject_hours_map[semester][s["type"]]
+                        ]
                         for subject in fallback_subjects:
                             subject_type = subject["type"]
                             staff_id = subject["staff_id"]
@@ -539,6 +542,142 @@ class semester_delete(GenericAPIView):
         semester.delete()
         return Response('Semester deleted successfully')
 
+
+#managesubjecttypechoices
+class SubjectTypeChoicesRegistration(GenericAPIView):
+    serializer_class = SubjectTypeChoicesSerializer
+
+    def post(self, request):
+        serializer = self.get_serializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response({'message': 'Subject type added successfully', 'data': serializer.data}, status=status.HTTP_201_CREATED)
+        return Response({'message': 'Failed to add subject type', 'errors': serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+
+class ViewAllSubjectTypes(GenericAPIView):
+    serializer_class = SubjectTypeChoicesSerializer
+
+    def get(self, request):
+        subject_types = SubjectTypeChoices.objects.all()
+        if subject_types.exists():
+            serializer = self.get_serializer(subject_types, many=True)
+            return Response({'data': serializer.data, 'message': 'Subject types fetched successfully', 'success': True}, status=status.HTTP_200_OK)
+        return Response({'data': [], 'message': 'No subject types available', 'success': False}, status=status.HTTP_404_NOT_FOUND)
+
+class SubjectTypeDetailView(GenericAPIView):
+    serializer_class = SubjectTypeChoicesSerializer
+
+    def get_object(self, id):
+        try:
+            return SubjectTypeChoices.objects.get(pk=id)
+        except SubjectTypeChoices.DoesNotExist:
+            return None
+
+    def get(self, request, id):
+        subject_type = self.get_object(id)
+        if subject_type:
+            serializer = self.get_serializer(subject_type)
+            return Response({'data': serializer.data, 'message': 'Subject type fetched successfully'}, status=status.HTTP_200_OK)
+        return Response({'message': 'Subject type not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    def put(self, request, id):
+        subject_type = self.get_object(id)
+        if not subject_type:
+            return Response({'message': 'Subject type not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = self.get_serializer(subject_type, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response({'data': serializer.data, 'message': 'Subject type updated successfully'}, status=status.HTTP_200_OK)
+        return Response({'message': 'Failed to update subject type', 'errors': serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+
+    def delete(self, request, id):
+        subject_type = self.get_object(id)
+        if not subject_type:
+            return Response({'message': 'Subject type not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        subject_type.delete()
+        return Response({'message': 'Subject type deleted successfully'}, status=status.HTTP_204_NO_CONTENT)
+
+#managenoofhours
+class NumberOfHourRegistration(GenericAPIView):
+    serializer_class = NumberofhourSerializer
+    
+    def post(self, request):
+        subject_type = request.data.get('subject_type')
+        no_of_hours_for_subject = request.data.get('no_of_hours_for_subject')
+        semester = request.data.get('semester')
+
+        # Check if the related SubjectTypeChoice and Semester exist
+        subject_type_instance = SubjectTypeChoice.objects.get(id=subject_type)
+        semester_instance = Semester.objects.get(id=semester)
+
+        number_of_hour_serializer = NumberofhourSerializer(
+            data={
+                'subject_type': subject_type_instance,
+                'no_of_hours_for_subject': no_of_hours_for_subject,
+                'semester': semester_instance,
+            })
+
+        if number_of_hour_serializer.is_valid():
+            number_of_hour_serializer.save()
+            return Response({'message': 'Number of hours added successfully'}, status=status.HTTP_201_CREATED)
+        else:
+            return Response({'message': 'Failed to add number of hours', 'errors': number_of_hour_serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+
+
+# View for All Number_of_hour
+class ViewAllNumberOfHours(GenericAPIView):
+    serializer_class = NumberofhourSerializer
+
+    def get(self, request):
+        number_of_hours = Number_of_hour.objects.all()
+        if number_of_hours:
+            serializer = NumberofhourSerializer(number_of_hours, many=True)
+            return Response({'data': serializer.data, 'message': 'Data fetched successfully', 'success': True}, status=status.HTTP_200_OK)
+        else:
+            return Response({'message': 'No data available'}, status=status.HTTP_404_NOT_FOUND)
+
+
+# Detail View for a Single Number_of_hour
+class NumberOfHourDetailView(GenericAPIView):
+    serializer_class = NumberofhourSerializer
+
+    def get(self, request, id):
+        try:
+            number_of_hour = Number_of_hour.objects.get(id=id)
+            serializer = NumberofhourSerializer(number_of_hour)
+            return Response({'data': serializer.data, 'message': 'Data fetched successfully', 'success': True}, status=status.HTTP_200_OK)
+        except Number_of_hour.DoesNotExist:
+            return Response({'message': 'Number of hours not found'}, status=status.HTTP_404_NOT_FOUND)
+
+
+# Update Number_of_hour
+class UpdateNumberOfHour(GenericAPIView):
+    serializer_class = NumberofhourSerializer
+
+    def put(self, request, id):
+        try:
+            number_of_hour = Number_of_hour.objects.get(id=id)
+            serializer = NumberofhourSerializer(number_of_hour, data=request.data, partial=True)
+            if serializer.is_valid():
+                serializer.save()
+                return Response({'message': 'Number of hours updated successfully', 'data': serializer.data}, status=status.HTTP_200_OK)
+            return Response({'message': 'Invalid data', 'errors': serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+        except Number_of_hour.DoesNotExist:
+            return Response({'message': 'Number of hours not found'}, status=status.HTTP_404_NOT_FOUND)
+
+
+# Delete Number_of_hour
+class DeleteNumberOfHour(GenericAPIView):
+    def delete(self, request, id):
+        try:
+            number_of_hour = Number_of_hour.objects.get(id=id)
+            number_of_hour.delete()
+            return Response({'message': 'Number of hours deleted successfully'}, status=status.HTTP_200_OK)
+        except Number_of_hour.DoesNotExist:
+            return Response({'message': 'Number of hours not found'}, status=status.HTTP_404_NOT_FOUND)
+
 #managesubjects
 class subjects_reg(GenericAPIView):
     def get_serializer_class(self):
@@ -549,7 +688,7 @@ class subjects_reg(GenericAPIView):
         subject_name=request.data.get('subject_name')
         department=request.data.get('department')
         staff_id=request.data.get('staff_id')
-        subject_type=request.data.get('subject_type')
+        subject_type_id=request.data.get('type_id')
         subject_code=request.data.get('subject_code')
 
         sub_serializer=SubjectSerializer(
@@ -558,7 +697,7 @@ class subjects_reg(GenericAPIView):
             'subject_name':subject_name,
             'department':department,
             'staff_id':staff_id,
-            'subject_type':subject_type,
+            'subject_type':subject_type_id,
             'subject_code':subject_code,})
 
         if sub_serializer.is_valid():

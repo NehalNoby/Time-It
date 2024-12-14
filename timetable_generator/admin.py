@@ -7,6 +7,8 @@ from.models import Department
 from.models import Semester
 from.models import Subject
 from.models import AdminSettings
+from.models import SubjectTypeChoice
+from.models import Number_of_hour
 # Register your models here.
 admin.site.register(Faculty)
 admin.site.register(Student)
@@ -16,3 +18,5 @@ admin.site.register(Department)
 admin.site.register(Semester)
 admin.site.register(Subject)
 admin.site.register(AdminSettings)
+admin.site.register(SubjectTypeChoice)
+admin.site.register(Number_of_hour)

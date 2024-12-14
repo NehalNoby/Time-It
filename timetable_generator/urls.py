@@ -40,6 +40,19 @@ urlpatterns = [
    path('semesterupdate/<int:id>',views.update_semester.as_view()),
    path('semesterdelete/<int:id>',views.semester_delete.as_view()),
 
+#subjecttypechoices
+   path('subject_typeregister/',views.SubjectTypeChoicesRegistration.as_view()),
+   path('subject_typeview/',views.ViewAllSubjectTypes.as_view()),
+   path('subject_type/<int:id>/',views.SubjectTypeDetailView.as_view()),
+
+#no.ofhours
+    path('number_of_hours/register/', views.NumberOfHourRegistration.as_view(), name='number_of_hours_register'),
+    path('number_of_hours/view/', views.ViewAllNumberOfHours.as_view(), name='view_all_number_of_hours'),
+    path('number_of_hours/<int:id>/', views.NumberOfHourDetailView.as_view(), name='number_of_hours_detail'),
+    path('number_of_hours/update/<int:id>/', views.UpdateNumberOfHour.as_view(), name='number_of_hours_update'),
+    path('number_of_hours/delete/<int:id>/', views.DeleteNumberOfHour.as_view(), name='number_of_hours_delete'),
+
+
 #subject
    path('subjectregistration/',views.subjects_reg.as_view()),
    path('viewsubjects/',views.view_subjects.as_view()),

@@ -79,6 +79,8 @@ class Faculty(models.Model):
     staff_id=models.CharField(max_length=40)
     profile_picture=models.ImageField(null=True, blank=True)
     is_hod=models.BooleanField(default=False)
+    max_hours_per_day = models.IntegerField(default=6, null=True, blank=True) 
+    max_hours_per_week = models.IntegerField(default=30, null=True, blank=True) 
 
     login_id=models.OneToOneField(Login,on_delete=models.CASCADE,default="100")
 

@@ -53,12 +53,21 @@ urlpatterns = [
     path('number_of_hours/delete/<int:id>/', views.DeleteNumberOfHour.as_view(), name='number_of_hours_delete'),
 
 
-#subject
-   path('subjectregistration/',views.subjects_reg.as_view()),
-   path('viewsubjects/',views.view_subjects.as_view()),
-   path('subjectupdate/<int:id>',views.update_subject.as_view()),
-   path('subjectdelete/<int:id>',views.subject_delete.as_view()),
-   path('generate-timetable/',views.GenerateTimeTableAPIView.as_view()),
+
+    # Existing Subject URLs
+    path('subjectregistration/', views.subjects_reg.as_view()),
+    path('viewsubjects/', views.view_subjects.as_view()),
+    path('subjectupdate/<int:id>', views.update_subject.as_view()),
+    path('subjectdelete/<int:id>', views.subject_delete.as_view()),
+
+    # Existing Generate Timetable URL
+    path('generate-timetable/', views.GenerateTimeTableAPIView.as_view()),
+    path('generate-teacher-timetable/<str:teacher_id>/', views.TeacherTimeTableAPIView.as_view(), name='generate_teacher_timetable'),
+
+
+   
+    
+
 
 #adminsettings
    # path('adminsettingsregistration/',views.adminsettings_reg.as_view()),

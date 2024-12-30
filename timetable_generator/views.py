@@ -7,9 +7,11 @@ from rest_framework import status
 from . models import Student
 from . models import Login,Faculty,College,Department,Semester,Subject,SubjectTypeChoice,AdminSettings,Number_of_hour
 from itertools import chain
+from django.core.exceptions import ObjectDoesNotExist
 from rest_framework.views import APIView
 import json
 import random
+from random import choice
 
 # Create your views here.
 def index(request):
@@ -154,6 +156,82 @@ class GenerateTimeTableAPIView(GenericAPIView):
                 timetable[semester][f"Day {day + 1}"] = daily_schedule
 
         return timetable
+
+
+
+class TeacherTimeTableAPIView(APIView):
+    
+    def get(self, request, teacher_id):
+        settings = AdminSettings.objects.first()
+        semesters = Semester.objects.all()
+        
+        if settings:
+            working_days = settings.no_of_workingdays
+            periods_per_day = settings.no_of_hours_in_a_day
+        else:
+            working_days = 5
+            periods_per_day = 5
+        
+        teacher = Faculty.objects.get(id=teacher_id)  # Fetch teacher by ID
+        teacher_timetable = {}
+        
+        for semester in semesters:
+            timetable = self.get_teacher_timetable_for_semester(teacher, semester, working_days, periods_per_day)
+            if timetable:
+                teacher_timetable[semester.sem_name] = timetable
+        
+        if not teacher_timetable:
+            return Response({
+                "message": "No timetable found for the teacher.",
+                "success": False
+            })
+        
+        return Response({
+            "data": teacher_timetable,
+            "message": "Teacher timetable retrieved successfully",
+            "success": True
+        })
+
+    def get_teacher_timetable_for_semester(self, teacher, semester, working_days, periods_per_day):
+        # Fetch subjects taught by the teacher in the given semester
+        subjects = semester.available_subjects.filter(staff=teacher)
+        if not subjects.exists():
+            return None
+        
+        timetable = {}
+        teacher_schedule = {
+            f"Day {day + 1}": [None] * periods_per_day for day in range(working_days)
+        }
+
+        for day in range(working_days):
+            daily_schedule = []
+            assigned_subjects_for_day = set()
+
+            for period in range(periods_per_day):
+                assigned = False
+                for subject in subjects:
+                    if subject.subject_name not in assigned_subjects_for_day:
+                        daily_schedule.append({
+                            "teacher": teacher.name,
+                            "subject": subject.subject_name,
+                            "subject_code": subject.subject_code,
+                            "semester": semester.sem_name,
+                            "subject_type": subject.subject_type.subject_types if subject.subject_type else "Unknown"
+                        })
+                        assigned_subjects_for_day.add(subject.subject_name)
+                        assigned = True
+                        break
+
+                if not assigned:
+                    # No subject assigned for this period, add an empty dict
+                    daily_schedule.append({})
+
+            timetable[f"Day {day + 1}"] = daily_schedule
+        
+        return timetable
+
+
+
 
 
 

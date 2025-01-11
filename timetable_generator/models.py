@@ -6,9 +6,11 @@ class RoleChoices(models.TextChoices):
     STUDENT="Student","Student"
     FACULTY="Faculty","Faculty"
     HOD="Hod","Hod"
+    COLLEGE="College","College"
 
 class SubjectTypeChoice(models.Model):
     subject_types=models.CharField(max_length=20,unique=True)
+    is_fixed=models.BooleanField(default=False)
 
     def __str__(self):
         return self.subject_types
@@ -25,8 +27,11 @@ class College(models.Model):
     code = models.CharField(max_length=20, unique=True)  # Unique code for the college
     location = models.CharField(max_length=200)
     established_year = models.IntegerField()
-    contact_email = models.EmailField()
+    email = models.EmailField()
+    password = models.CharField(max_length=40,default="1234")
     college_logo=models.ImageField(null=True,blank=True)
+
+    login_id=models.OneToOneField(Login,on_delete=models.CASCADE,default="100")
 
     def __str__(self):
         return self.name
@@ -45,8 +50,9 @@ class Subject(models.Model):
     department=models.ForeignKey(Department,on_delete=models.SET_NULL,null=True)
     staff=models.ForeignKey('Faculty',on_delete=models.SET_NULL,null=True)
     subject_type= models.ForeignKey(SubjectTypeChoice, on_delete=models.CASCADE,null=True,blank=True)
+    sem=models.ForeignKey('Semester',on_delete=models.SET_NULL,null=True,related_name="semester_subjects")
     subject_code=models.CharField(max_length=40)
-    is_fixed=models.BooleanField(default=False)
+
 
     def __str__(self):
         return f"{self.department.dept_name if self.department else ''}-{self.subject_name} -{self.subject_type}" 
@@ -105,6 +111,16 @@ class Student(models.Model):
         return self.name
 
 
+class Schedule(models.Model):
+    semester = models.ForeignKey(Semester, on_delete=models.CASCADE)
+    day = models.IntegerField()  # Day of the week (1-5)
+    hour = models.IntegerField()  # Hour of the day (1-5)
+    subject_type = models.ForeignKey(SubjectTypeChoice, on_delete=models.SET_NULL, null=True, blank=True)
+    teacher = models.ForeignKey(Faculty, on_delete=models.SET_NULL, null=True, blank=True)
+    subject = models.ForeignKey(Subject, on_delete=models.SET_NULL, null=True, blank=True)
+
+    def __str__(self):
+        return f"{self.semester.sem_name} - Day {self.day}, Hour {self.hour} - {self.subject.subject_name} - {self.teacher.name}"
 
 
 class AdminSettings(models.Model):

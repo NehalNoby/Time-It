@@ -1,17 +1,18 @@
 from django.shortcuts import render
 from django.http import HttpResponse
 from rest_framework.generics import GenericAPIView
-from.serializers import StudentSerializer,LoginSerializer,FacultySerializer,CollegeSerializer,DepartmentSerializer,SemesterSerializer,SubjectSerializer,AdminSettingsSerializer,SubjectTypeChoicesSerializer,NumberofhourSerializer
+from.serializers import StudentSerializer,LoginSerializer,FacultySerializer,CollegeSerializer,DepartmentSerializer,SemesterSerializer,SubjectSerializer,AdminSettingsSerializer,SubjectTypeChoicesSerializer,NumberofhourSerializer,ScheduleSerializer
 from rest_framework.response import Response
 from rest_framework import status
 from . models import Student
-from . models import Login,Faculty,College,Department,Semester,Subject,SubjectTypeChoice,AdminSettings,Number_of_hour
+from . models import Login,Faculty,College,Department,Semester,Subject,SubjectTypeChoice,AdminSettings,Number_of_hour,Schedule
 from itertools import chain
 from django.core.exceptions import ObjectDoesNotExist
 from rest_framework.views import APIView
 import json
 import random
 from random import choice
+from django.db.models import Q 
 
 # Create your views here.
 def index(request):
@@ -160,76 +161,103 @@ class GenerateTimeTableAPIView(GenericAPIView):
 
 
 class TeacherTimeTableAPIView(APIView):
-    
-    def get(self, request, teacher_id):
-        settings = AdminSettings.objects.first()
+    def post(self, request):
+        # Fetch admin settings for the working days and hours in a day
+        admin_settings = AdminSettings.objects.first()  # Assuming there's only one admin setting record
+        working_days = list(range(1, admin_settings.no_of_workingdays + 1))  # Convert to list of days
+        hours_per_day = admin_settings.no_of_hours_in_a_day
+        total_hours_per_week = len(working_days) * hours_per_day
+
+        # Fetch all subject types and their allocated hours
+        subject_types = SubjectTypeChoice.objects.all()
+
+        # Get all semesters and their available subjects
         semesters = Semester.objects.all()
-        
-        if settings:
-            working_days = settings.no_of_workingdays
-            periods_per_day = settings.no_of_hours_in_a_day
-        else:
-            working_days = 5
-            periods_per_day = 5
-        
-        teacher = Faculty.objects.get(id=teacher_id)  # Fetch teacher by ID
-        teacher_timetable = {}
-        
+
+        # Fetch the faculty members and their availability (max hours per day and week)
+        faculties = Faculty.objects.all()
+
+        schedule = []
+        conflicts = []
+
+        # Distribute subjects across the schedule
         for semester in semesters:
-            timetable = self.get_teacher_timetable_for_semester(teacher, semester, working_days, periods_per_day)
-            if timetable:
-                teacher_timetable[semester.sem_name] = timetable
-        
-        if not teacher_timetable:
-            return Response({
-                "message": "No timetable found for the teacher.",
-                "success": False
-            })
-        
-        return Response({
-            "data": teacher_timetable,
-            "message": "Teacher timetable retrieved successfully",
-            "success": True
-        })
+            # For each semester, consider only the subjects available for this semester
+            available_subjects = semester.available_subjects.all()
 
-    def get_teacher_timetable_for_semester(self, teacher, semester, working_days, periods_per_day):
-        # Fetch subjects taught by the teacher in the given semester
-        subjects = semester.available_subjects.filter(staff=teacher)
-        if not subjects.exists():
-            return None
-        
-        timetable = {}
-        teacher_schedule = {
-            f"Day {day + 1}": [None] * periods_per_day for day in range(working_days)
-        }
+            for subject_type in subject_types:
+                # Get the number of hours allocated for each subject type in this semester
+                number_of_hours_entry = Number_of_hour.objects.filter(subject_type=subject_type, semester=semester).first()
 
-        for day in range(working_days):
-            daily_schedule = []
-            assigned_subjects_for_day = set()
+                if number_of_hours_entry is None:
+                    # If no record is found for this subject type and semester, handle the error
+                    conflicts.append({
+                        "message": f"No allocated hours for {subject_type.subject_types} in {semester.sem_name}",
+                        "semester": semester.sem_name,
+                        "subject_type": subject_type.subject_types
+                    })
+                    continue  # Skip this subject type and semester
 
-            for period in range(periods_per_day):
-                assigned = False
+                number_of_hours = number_of_hours_entry.no_of_hours_for_subject
+                
+                # Filter subjects that belong to the current subject type and are in the available subjects for the semester
+                subjects = available_subjects.filter(subject_type=subject_type)
+
+                # Assign subjects to available hours in the schedule
+                day_index = 0
+                hour_index = 1
                 for subject in subjects:
-                    if subject.subject_name not in assigned_subjects_for_day:
-                        daily_schedule.append({
-                            "teacher": teacher.name,
-                            "subject": subject.subject_name,
-                            "subject_code": subject.subject_code,
-                            "semester": semester.sem_name,
-                            "subject_type": subject.subject_type.subject_types if subject.subject_type else "Unknown"
-                        })
-                        assigned_subjects_for_day.add(subject.subject_name)
-                        assigned = True
-                        break
+                    if number_of_hours > 0:
+                        # Check if this subject can be scheduled at the current hour and day
+                        if hour_index > hours_per_day:
+                            day_index += 1
+                            hour_index = 1
+                        if day_index >= len(working_days):  # Ensure we don't go out of working days
+                            break
 
-                if not assigned:
-                    # No subject assigned for this period, add an empty dict
-                    daily_schedule.append({})
+                        # Check for faculty availability (no conflicts in time slots)
+                        faculty = subject.staff
+                        conflicting_schedule = Schedule.objects.filter(
+                            Q(teacher=faculty) & Q(day=working_days[day_index]) & Q(hour=hour_index)
+                        )
 
-            timetable[f"Day {day + 1}"] = daily_schedule
-        
-        return timetable
+                        # Also check for conflicts in other semesters for this teacher
+                        semester_conflicts = Schedule.objects.filter(
+                            Q(teacher=faculty) & Q(hour=hour_index) & ~Q(semester=semester)
+                        )
 
+                        if conflicting_schedule.exists() or semester_conflicts.exists():
+                            conflicts.append({
+                                "day": working_days[day_index],
+                                "hour": hour_index,
+                                "teacher": faculty.name,
+                                "subject": subject.subject_name
+                            })
+                        else:
+                            # Assign the subject to this time slot
+                            Schedule.objects.create(
+                                semester=semester,
+                                day=working_days[day_index],
+                                hour=hour_index,
+                                subject_type=subject_type,
+                                teacher=faculty
+                            )
+                            schedule.append({
+                                "semester": semester.sem_name,
+                                "day": working_days[day_index],
+                                "hour": hour_index,
+                                "subject_type": subject_type.subject_types,
+                                "teacher": faculty.name,
+                                "subject": subject.subject_name
+                            })
+
+                        hour_index += 1
+                        number_of_hours -= 1
+
+        return Response({
+            "schedule": schedule,
+            "conflicts": conflicts
+        })
 
 
 
@@ -246,16 +274,17 @@ class student_reg(GenericAPIView):
         mobile=request.data.get('mobile')
         password=request.data.get('password')
         department=request.data.get('department')
+        semester=request.data.get('semester')
         role='Student'
 
-        if not name or not email or not mobile or not password or not department:
-            return Response({'message': 'All fields are required'},status=status.HTTP_400_BAD_REQUEST,)
+        # if not name or not email or not mobile or not password or not department:
+        #     return Response({'message': 'All fields are required'},status=status.HTTP_400_BAD_REQUEST,)
 
-        if Student.objects.filter(email=email).exists():
-            return Response({'message': 'Duplicate Emails are not allowed'},status=status.HTTP_400_BAD_REQUEST,)
+        # if Student.objects.filter(email=email).exists():
+        #     return Response({'message': 'Duplicate Emails are not allowed'},status=status.HTTP_400_BAD_REQUEST,)
 
-        elif Student.objects.filter(mobile=mobile).exists():
-            return Response({'message': 'Number already found'},status=status.HTTP_400_BAD_REQUEST,)
+        # elif Student.objects.filter(mobile=mobile).exists():
+        #     return Response({'message': 'Number already found'},status=status.HTTP_400_BAD_REQUEST,)
 
         login_serializer=LoginSerializer(data={'email':email,'password':password,'role':role})
         print(login_serializer)
@@ -277,13 +306,22 @@ class student_reg(GenericAPIView):
             'role':role,
             'login_id':login_id})
         
-        minor_subjects_id=json.loads(request.data.get("minor"))
+   
 
-        
-        major_subjects=Subject.objects.filter(department=department,subject_type=SubjectTypeChoices.MAJOR)
-        aec1_subjects=Subject.objects.filter(department=department,subject_type=SubjectTypeChoices.AEC1)
-        minor_subjects=Subject.objects.filter(id__in=minor_subjects_id)
-        combined_queryset=chain(major_subjects,aec1_subjects,minor_subjects)
+        sub_list=[]
+        for obj in SubjectTypeChoice.objects.all():
+            fixed_subs=Subject.objects.filter(is_fixed=True,subject_type=obj,semester__id=semester)
+            sub_list.append(fixed_subs)
+
+        for obj in Subject.objects.filter(is_fixed=False,semester__id=semester):
+            key=obj.subject_type.subject_types
+            if key:
+                subjects_id=json.loads(request.data.get(key)) if key in request.data else []
+                query=Subject.objects.filter(id__in=subjects_id)
+                print(query)
+                sub_list.append(query)
+
+        combined_queryset=chain(*sub_list)
         
 
         if student_serializer.is_valid():
@@ -293,6 +331,7 @@ class student_reg(GenericAPIView):
             return Response({'message':'Registration Successfull'},status=status.HTTP_200_OK,)
 
         else:
+            l.delete()
             return Response({'mmesage':'Registration Failed'},status=status.HTTP_400_BAD_REQUEST,)
 
 
@@ -351,25 +390,19 @@ class faculty_reg(GenericAPIView):
             login_id=l.id
 
         else:
-            return Response({'message':'Login Failed'},status=status.HTTP_400_BAD_REQUEST,)
+            return Response({'message':'regstration Failed','errors':login_serializer.errors},status=status.HTTP_400_BAD_REQUEST,)
 
-        faculty_serializer=FacultySerializer(
-
-        data={
-            'name':name,
-            'email':email,
-            'mobile':mobile,
-            'password':password,
-            'department':department,
-            'role':role,
-            'login_id':login_id})
+        faculty_data=request.data.copy()
+        faculty_data['role']=role
+        faculty_data['login_id']=login_id
+        faculty_serializer=FacultySerializer(data=faculty_data)
 
         if faculty_serializer.is_valid():
             faculty_serializer.save()
             return Response({'message':'Registration Successfull'},status=status.HTTP_200_OK,)
-
         else:
-            return Response({'message':'Registration Failed'},status=status.HTTP_400_BAD_REQUEST,)
+            l.delete()
+            return Response({'message':'Registration Failed','errors':faculty_serializer.errors},status=status.HTTP_400_BAD_REQUEST,)
 
 
 
@@ -464,20 +497,49 @@ class faculty_delete(GenericAPIView):
 
 #college
 class college_reg(GenericAPIView):
-    def get(self, request, code):
-        try:
-            college = College.objects.prefetch_related('departments').get(code=code)
-        except College.DoesNotExist:
-            raise NotFound("College with the given code does not exist.")
+    def get_serializer_class(self):
+        return CollegeSerializer
 
-        data = {
-            "name": college.name,
-            "location": college.location,
-            "established_year": college.established_year,
-            "contact_email": college.contact_email,
-            "departments": [{"id": dept.id, "name": dept.dept_name} for dept in college.departments.all()],
-        }
-        return Response(data)
+    def post(self,request):
+
+        login_id=""
+        name=request.data.get('name')
+        code=request.data.get('code')
+        location=request.data.get('location')
+        established_year=request.data.get('established_year')
+        email=request.data.get('email')
+        password=request.data.get('password')
+        role='College'
+
+        if not name or not code or not location or not established_year or not email:
+            return Response({'message': 'All fields are required'},status=status.HTTP_400_BAD_REQUEST,)
+
+        if College.objects.filter(email=email).exists():
+            return Response({'message': 'Duplicate Emails are not allowed'},status=status.HTTP_400_BAD_REQUEST,)
+
+        elif College.objects.filter(code=code).exists():
+            return Response({'message': 'Code already found'},status=status.HTTP_400_BAD_REQUEST,)
+
+        login_serializer=LoginSerializer(data={'email':email,'password':password,'role':role})
+        print(login_serializer)
+        if login_serializer.is_valid():
+            l=login_serializer.save()
+            login_id=l.id
+
+        else:
+            return Response({'message':'Registration Failed','errors':login_serializer.errors},status=status.HTTP_400_BAD_REQUEST,)
+        college_data=request.data.copy()
+        college_data['role']=role
+        college_data['login_id']=login_id
+        college_serializer=CollegeSerializer(data=college_data)
+
+        if college_serializer.is_valid():
+            college_serializer.save()
+            return Response({'message':'Registration Successfull'},status=status.HTTP_200_OK,)
+        else:
+            l.delete()
+            return Response({'message':'Registration Failed','errors':college_serializer.errors},status=status.HTTP_400_BAD_REQUEST,)
+
 
 class view_college(GenericAPIView):
     serializer_class=CollegeSerializer
@@ -496,7 +558,7 @@ class update_college(GenericAPIView):
 
     def put(self,request,id):
         college=College.objects.get(pk=id)
-        serializercollege=CollegeSerializer(instance=college,data=request.data,partial=True)
+        serializercollege=CollegeSerializer(college,data=request.data,partial=True)
 
         if serializercollege.is_valid():
             serializercollege.save()
@@ -513,6 +575,14 @@ class college_delete(GenericAPIView):
 
         return Response('Department deleted successfully')  
 
+class college_login(GenericAPIView):
+    serializer_class=CollegeSerializer
+
+    def get(self,request,login_id):
+        college=College.objects.get(login_id=login_id)
+        serializercollege=CollegeSerializer(college)
+        return Response(serializercollege.data)  
+
 
 #managedepartment
 class department_reg(GenericAPIView):
@@ -520,15 +590,7 @@ class department_reg(GenericAPIView):
         return DepartmentSerializer
 
     def post(self,request):
-
-        dept_name=request.data.get('dept_name')
-        dept_id=request.data.get('dept_id')
-
-        dept_serializer=DepartmentSerializer(
-
-        data={
-            'dept_name':dept_name,
-            'dept_id':dept_id,})
+        dept_serializer=DepartmentSerializer(data=request.data)
 
         if dept_serializer.is_valid():
             dept_serializer.save()

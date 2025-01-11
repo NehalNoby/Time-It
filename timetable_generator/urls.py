@@ -26,6 +26,7 @@ urlpatterns = [
    path('viewcollege/',views.view_college.as_view()),
    path('collegeupdate/<int:id>',views.update_college.as_view()),
    path('collegedelete/<int:id>',views.college_delete.as_view()),
+   path('collegelogin/<int:login_id>',views.college_login.as_view()),
 
 
 #department
@@ -62,7 +63,7 @@ urlpatterns = [
 
     # Existing Generate Timetable URL
     path('generate-timetable/', views.GenerateTimeTableAPIView.as_view()),
-    path('generate-teacher-timetable/<str:teacher_id>/', views.TeacherTimeTableAPIView.as_view(), name='generate_teacher_timetable'),
+    path('generate-teacher-timetable/', views.TeacherTimeTableAPIView.as_view(), name='generate_teacher_timetable'),
 
 
    

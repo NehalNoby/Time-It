@@ -66,6 +66,7 @@ urlpatterns = [
     path('generate-teacher-timetable/', views.TeacherTimeTableAPIView.as_view(), name='generate_teacher_timetable'),
 
 
+
    
     
 

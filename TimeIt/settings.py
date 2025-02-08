@@ -25,12 +25,13 @@ SECRET_KEY = 'django-insecure-o=+9)nbcd78jlavof)2ou4##@gu^g^99)v+q)+6^fa8)jsw6cr
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['*']
 
 
 # Application definition
 
 INSTALLED_APPS = [
+    'jazzmin',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -40,7 +41,12 @@ INSTALLED_APPS = [
     'timetable_generator',
     'rest_framework',
 ]
-
+JAZZMIN_SETTINGS = {
+    "site_title": "Admin Panel",
+    "site_header": "Admin Panel",
+    "welcome_sign": "Welcome to My Admin Panel",
+    "site_brand": "TimeIt",
+}
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',

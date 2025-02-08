@@ -10,8 +10,10 @@ from itertools import chain
 from django.core.exceptions import ObjectDoesNotExist
 from rest_framework.views import APIView
 import json
+
 import random
 from random import choice
+from collections import defaultdict
 from django.db.models import Q 
 
 # Create your views here.
@@ -25,20 +27,15 @@ class GenerateTimeTableAPIView(GenericAPIView):
         settings = AdminSettings.objects.first()
         semesters = Semester.objects.all()
 
-        if settings:
-            working_days = settings.no_of_workingdays
-            periods_per_day = settings.no_of_hours_in_a_day
-        else:
-            working_days = 5
-            periods_per_day = 5
+        working_days = settings.no_of_workingdays if settings else 5
+        periods_per_day = settings.no_of_hours_in_a_day if settings else 5
 
         teachers_subjects_map = {}
         teacher_availability = {}
         subject_hours_map = {}
 
         for semester in semesters:
-            subjects = semester.available_subjects.all()
-            teachers_subjects_map[semester.sem_name] = []
+            teachers_subjects_map[semester.sem_name] = defaultdict(list)
             subject_hours_map[semester.sem_name] = {}
 
             # Populate subject hours based on Number_of_hour
@@ -47,17 +44,17 @@ class GenerateTimeTableAPIView(GenericAPIView):
                 hours_entry = Number_of_hour.objects.filter(subject_type=subject_type, semester=semester).first()
                 subject_hours_map[semester.sem_name][subject_type.subject_types] = hours_entry.no_of_hours_for_subject if hours_entry else 0
 
-            for subject in subjects:
+            for subject in semester.available_subjects.all():
                 if subject.staff:
-                    teachers_subjects_map[semester.sem_name].append({
+                    teachers_subjects_map[semester.sem_name][subject.subject_type.subject_types if subject.subject_type else "Unknown"].append({
                         "teacher": subject.staff.name,
                         "subject": subject.subject_name,
                         "subject_code": subject.subject_code,
                         "department": subject.department.dept_name if subject.department else None,
                         "staff_id": subject.staff.staff_id,
-                        "type": subject.subject_type.subject_types if subject.subject_type else "Unknown",
                     })
 
+        # Initialize teacher availability
         for semester in semesters:
             for subject in semester.available_subjects.all():
                 if subject.staff:
@@ -67,14 +64,18 @@ class GenerateTimeTableAPIView(GenericAPIView):
                             f"Day {day + 1}": [False] * periods_per_day for day in range(working_days)
                         }
 
-        timetable = self.generate_timetable(
-            [semester.sem_name for semester in semesters],
-            working_days,
-            periods_per_day,
-            teachers_subjects_map,
-            teacher_availability,
-            subject_hours_map
-        )
+        # Generate timetable
+        try:
+            timetable = self.generate_timetable(
+                [semester.sem_name for semester in semesters],
+                working_days,
+                periods_per_day,
+                teachers_subjects_map,
+                teacher_availability,
+                subject_hours_map
+            )
+        except ValueError as e:
+            return Response({"message": str(e), "success": False}, status=400)
 
         return Response({
             "data": timetable,
@@ -90,8 +91,10 @@ class GenerateTimeTableAPIView(GenericAPIView):
             subject_hour_tracker = {k: 0 for k in subject_hours_map[semester]}
             total_hours_needed = sum(subject_hours_map[semester].values())
 
-            if total_hours_needed != working_days * periods_per_day:
-                raise ValueError(f"Mismatch in total hours ({total_hours_needed}) and available periods ({working_days * periods_per_day}) for semester {semester}.")
+            if total_hours_needed > working_days * periods_per_day:
+                raise ValueError(f"Too many hours ({total_hours_needed}) required compared to available periods ({working_days * periods_per_day}) for semester {semester}.")
+            elif total_hours_needed < working_days * periods_per_day:
+                raise ValueError(f"Too few hours ({total_hours_needed}) required compared to available periods ({working_days * periods_per_day}) for semester {semester}.")
 
             for day in range(working_days):
                 daily_schedule = []
@@ -99,68 +102,169 @@ class GenerateTimeTableAPIView(GenericAPIView):
 
                 for period in range(periods_per_day):
                     available_subjects = [
-                        s for s in teachers_subjects_map.get(semester, []) \
-                        if subject_hour_tracker[s["type"]] < subject_hours_map[semester][s["type"]]
+                        (subject_type, subjects) for subject_type, subjects in teachers_subjects_map.get(semester, {}).items()
+                        if subject_hour_tracker[subject_type] < subject_hours_map[semester][subject_type]
                     ]
                     assigned = False
 
                     while available_subjects and not assigned:
-                        subject = random.choice(available_subjects)
-                        teacher = subject["teacher"]
-                        staff_id = subject["staff_id"]
-                        subject_name = subject["subject"]
-                        subject_type = subject["type"]
+                        subject_type, subjects = random.choice(available_subjects)
 
-                        if (not teacher_availability[staff_id][f"Day {day + 1}"][period] and
-                            subject_name not in assigned_subjects_for_day):
+                        combined_teachers = []
+                        combined_subjects = []
+                        staff_ids = []
 
-                            teacher_availability[staff_id][f"Day {day + 1}"][period] = True
+                        for subject in subjects:
+                            combined_teachers.append(subject["teacher"])
+                            combined_subjects.append(subject["subject"])
+                            staff_ids.append(subject["staff_id"])
+
+                        teacher_str = ", ".join(set(combined_teachers))
+                        subject_str = ", ".join(set(combined_subjects))
+
+                        if all(not teacher_availability[staff_id][f"Day {day + 1}"][period] for staff_id in staff_ids) and subject_str not in assigned_subjects_for_day:
+                            for staff_id in staff_ids:
+                                teacher_availability[staff_id][f"Day {day + 1}"][period] = True
+
                             daily_schedule.append({
-                                "teacher": teacher,
-                                "subject": subject_name,
-                                "subject_code": subject["subject_code"],
+                                "teacher": teacher_str,
+                                "subject": subject_str,
+                                "subject_code": "-",
                                 "semester": semester,
                                 "subject_type": subject_type,
                             })
-                            assigned_subjects_for_day.add(subject_name)
+                            assigned_subjects_for_day.add(subject_str)
                             subject_hour_tracker[subject_type] += 1
                             assigned = True
                         else:
-                            available_subjects.remove(subject)
+                            available_subjects.remove((subject_type, subjects))
 
+                    # Fallback if no suitable subject found
                     if not assigned:
-                        fallback_subjects = [
-                            s for s in teachers_subjects_map.get(semester, []) \
-                            if subject_hour_tracker[s["type"]] < subject_hours_map[semester][s["type"]]
-                        ]
-                        for subject in fallback_subjects:
-                            subject_type = subject["type"]
-                            staff_id = subject["staff_id"]
-                            subject_name = subject["subject"]
-
-                            if not teacher_availability[staff_id][f"Day {day + 1}"][period]:
-                                teacher_availability[staff_id][f"Day {day + 1}"][period] = True
-                                daily_schedule.append({
-                                    "teacher": subject["teacher"],
-                                    "subject": subject_name,
-                                    "subject_code": subject["subject_code"],
-                                    "semester": semester,
-                                    "subject_type": subject_type,
-                                })
-                                subject_hour_tracker[subject_type] += 1
-                                assigned = True
-                                break
-
-                    if not assigned:
-                        raise ValueError(f"Unable to assign subject for period {period + 1} on Day {day + 1} in semester {semester}.")
+                        daily_schedule.append({
+                            "teacher": "Unassigned",
+                            "subject": "Free Period",
+                            "subject_code": "-",
+                            "semester": semester,
+                            "subject_type": "None",
+                        })
 
                 timetable[semester][f"Day {day + 1}"] = daily_schedule
 
         return timetable
 
+basic_structure=[
+    {'day_1':{1:'major',2:'major',3:'minor1',4:'minor2',5:'MDC'}},
+
+
+    {'day_2':{1:'major',2:'major',3:'minor1',4:'minor2',5:'MDC'}},
+    {'day_3':{1:'major',2:'major',3:'minor1',4:'minor2',5:'MDC'}},
+    {'day_4':{1:'major',2:'major',3:'minor1',4:'minor2',5:'MDC'}},
+    {'day_5':{1:'major',2:'major',3:'minor1',4:'minor2',5:'MDC'}},
+    ]
+
+
+def fetch_data():
+    departments = ["CSE", "ECE", "MECH", "CIVIL"]
+    
+    subjects = {
+        "major": {"CSE": ["DBMS", "OS"], "ECE": ["VLSI", "DSP"], "MECH": ["Thermo", "Fluid"], "CIVIL": ["Structure", "Geotech"]},
+        "major2": {"CSE": ["AI", "ML"], "ECE": ["EMF", "Comm"], "MECH": ["Dynamics", "Manufacturing"], "CIVIL": ["Hydro", "Transportation"]},
+        "minor1": {"CSE": ["Python"], "ECE": ["Embedded"], "MECH": ["CAD"], "CIVIL": ["Surveying"]},
+        "minor2": {"CSE": ["Cyber Sec"], "ECE": ["Robotics"], "MECH": ["3D Printing"], "CIVIL": ["Materials"]},
+        "MDC": {"CSE": ["Ethics"], "ECE": ["Project"], "MECH": ["Mechatronics"], "CIVIL": ["Smart Cities"]},
+    }
+    
+    teachers = {
+        "Prof. A": ["DBMS", "OS", "AI"],
+        "Prof. B": ["VLSI", "DSP", "Comm"],
+        "Prof. C": ["Thermo", "Fluid", "Dynamics"],
+        "Prof. D": ["Structure", "Geotech", "Hydro"],
+        "Prof. E": ["Python", "Embedded", "CAD"],
+        "Prof. F": ["Cyber Sec", "Robotics", "3D Printing"],
+        "Prof. G": ["Ethics", "Project", "Mechatronics"]
+    }
+    
+    num_days = 5
+    num_hours = 5
+    
+    return departments, subjects, teachers, num_days, num_hours
+
+def generate_timetable():
+    departments, subjects, teachers, num_days, num_hours = fetch_data()
+    
+    base_structure = [
+        {f'day_{d+1}': {h+1: None for h in range(num_hours)}} for d in range(num_days)
+    ]
+    
+    timetable = {}
+    teacher_schedule = {t: set() for t in teachers}
+    
+    for semester in range(1, 9):
+        if semester > 4:
+            break
+        
+        timetable[f'Semester_{semester}'] = {}
+        
+        for day in base_structure:
+            for day_name, periods in day.items():
+                day_schedule = {}
+                subject_type_count = {key: 0 for key in subjects.keys()}
+                
+                for period in periods:
+                    available_subject_types = [st for st in subjects.keys() if subject_type_count[st] < 2]
+                    if available_subject_types:
+                        subject_type = random.choice(available_subject_types)
+                        subject_type_count[subject_type] += 1
+                        day_schedule[period] = subject_type
+                
+                for dept in departments:
+                    if dept not in timetable[f'Semester_{semester}']:
+                        timetable[f'Semester_{semester}'][dept] = []
+                    
+                    period_schedule = {}
+                    for period, subject_type in day_schedule.items():
+                        available_subjects = subjects[subject_type].get(dept, [])
+                        
+                        if available_subjects:
+                            random.shuffle(available_subjects)
+                            assigned_teacher = None
+                            subject = None
+                            
+                            for sub in available_subjects:
+                                available_teachers = [t for t in teachers if sub in teachers[t] and len(teacher_schedule[t]) < num_days * num_hours // len(teachers)]
+                                
+                                if available_teachers:
+                                    assigned_teacher = random.choice(available_teachers)
+                                    subject = sub
+                                    break
+                            
+                            if assigned_teacher:
+                                teacher_schedule[assigned_teacher].add((day_name, period))
+                                period_schedule[period] = (subject_type, subject, assigned_teacher)
+                            else:
+                                period_schedule[period] = (subject_type, "No Teacher Available")
+                        else:
+                            period_schedule[period] = (subject_type, "No Subject Available")
+                    
+                    timetable[f'Semester_{semester}'][dept].append({day_name: period_schedule})
+    
+    return timetable
+
+timetable = generate_timetable()
+for sem, depts in timetable.items():
+    print(f"\n{sem}")
+    for dept, schedule in depts.items():
+        print(f"  {dept}")
+        for day in schedule:
+            print(f"    {day}")
+
 
 
 class TeacherTimeTableAPIView(APIView):
+    def get(self, request):
+        generate_timetable(departments, subjects, teachers)
+        return Response(timetable)
     def post(self, request):
         # Fetch admin settings for the working days and hours in a day
         admin_settings = AdminSettings.objects.first()  # Assuming there's only one admin setting record
@@ -264,75 +368,72 @@ class TeacherTimeTableAPIView(APIView):
 
 
 class student_reg(GenericAPIView):
-    serializer_class=StudentSerializer
+    serializer_class = StudentSerializer
 
-    def post(self,request):
+    def post(self, request):
+        login_id = ""
+        name = request.data.get("name")
+        email = request.data.get("email")
+        mobile = request.data.get("mobile")
+        password = request.data.get("password")
+        department = request.data.get("department")
+        semester = request.data.get("semester")
+        role = "Student"
 
-        login_id=""
-        name=request.data.get('name')
-        email=request.data.get('email')
-        mobile=request.data.get('mobile')
-        password=request.data.get('password')
-        department=request.data.get('department')
-        semester=request.data.get('semester')
-        role='Student'
-
-        # if not name or not email or not mobile or not password or not department:
-        #     return Response({'message': 'All fields are required'},status=status.HTTP_400_BAD_REQUEST,)
-
-        # if Student.objects.filter(email=email).exists():
-        #     return Response({'message': 'Duplicate Emails are not allowed'},status=status.HTTP_400_BAD_REQUEST,)
-
-        # elif Student.objects.filter(mobile=mobile).exists():
-        #     return Response({'message': 'Number already found'},status=status.HTTP_400_BAD_REQUEST,)
-
-        login_serializer=LoginSerializer(data={'email':email,'password':password,'role':role})
-        print(login_serializer)
+        # Handle login
+        login_serializer = LoginSerializer(data={"email": email, "password": password, "role": role})
         if login_serializer.is_valid():
-            l=login_serializer.save()
-            login_id=l.id
-
+            l = login_serializer.save()
+            login_id = l.id
         else:
-            return Response({'message':'Login Failed','error':login_serializer.errors},status=status.HTTP_400_BAD_REQUEST,)
+            return Response(
+                {"message": "Login Failed", "error": login_serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        student_serializer=self.serializer_class(
+        # Handle student registration
+        student_serializer = self.serializer_class(
+            data={
+                "name": name,
+                "email": email,
+                "mobile": mobile,
+                "password": password,
+                "department": department,
+                "role": role,
+                "login_id": login_id,
+            }
+        )
 
-        data={
-            'name':name,
-            'email':email,
-            'mobile':mobile,
-            'password':password,
-            'department':department,
-            'role':role,
-            'login_id':login_id})
-        
-   
+        # Collect subjects
+        sub_list = []
 
-        sub_list=[]
-        for obj in SubjectTypeChoice.objects.all():
-            fixed_subs=Subject.objects.filter(is_fixed=True,subject_type=obj,semester__id=semester)
+        # Query fixed subjects
+        for obj in SubjectTypeChoice.objects.filter(is_fixed=True):
+            fixed_subs = Subject.objects.filter(subject_type=obj, sem__id=semester)
             sub_list.append(fixed_subs)
 
-        for obj in Subject.objects.filter(is_fixed=False,semester__id=semester):
-            key=obj.subject_type.subject_types
+        # Query non-fixed subjects
+        for obj in Subject.objects.filter(subject_type__is_fixed=False, sem__id=semester):
+            key = obj.subject_type.subject_types
             if key:
-                subjects_id=json.loads(request.data.get(key)) if key in request.data else []
-                query=Subject.objects.filter(id__in=subjects_id)
-                print(query)
+                subjects_id = json.loads(request.data.get(key)) if key in request.data else []
+                query = Subject.objects.filter(id__in=subjects_id)
                 sub_list.append(query)
 
-        combined_queryset=chain(*sub_list)
-        
+        # Combine all subject querysets
+        combined_queryset = chain(*sub_list)
 
         if student_serializer.is_valid():
-            student=student_serializer.save()
+            student = student_serializer.save()
             student.selected_subjects.add(*combined_queryset)
             student.save()
-            return Response({'message':'Registration Successfull'},status=status.HTTP_200_OK,)
-
+            return Response({"message": "Registration Successful"}, status=status.HTTP_200_OK)
         else:
             l.delete()
-            return Response({'mmesage':'Registration Failed'},status=status.HTTP_400_BAD_REQUEST,)
+            return Response(
+                {"message": "Registration Failed", "error": student_serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
 
 
@@ -847,11 +948,10 @@ class subjects_reg(GenericAPIView):
         else:
             return Response({'message':'Subject adding Failed'},status=status.HTTP_400_BAD_REQUEST,)                 
 
-
 class view_subjects(GenericAPIView):
     serializer_class=SubjectSerializer
     def get(self,request):
-        subjects=Subjects.objects.all()
+        subjects=Subject.objects.all()
         if subjects.count()>0:
             serializersub=SubjectSerializer(subjects,many=True)
             return Response({'data':serializersub.data,'message':'Data fetched','Success':True},status=status.HTTP_200_OK)

@@ -41,6 +41,7 @@ INSTALLED_APPS = [
     'timetable_generator',
     'rest_framework',
 ]
+
 JAZZMIN_SETTINGS = {
     "site_title": "Admin Panel",
     "site_header": "Admin Panel",

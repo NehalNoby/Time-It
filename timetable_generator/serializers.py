@@ -12,6 +12,7 @@ class LoginSerializer(serializers.ModelSerializer):
         model=Login
         fields='__all__'
 
+
 class FacultySerializer(serializers.ModelSerializer):
     class Meta:
         model=Faculty

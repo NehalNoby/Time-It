@@ -119,6 +119,8 @@ class Schedule(models.Model):
     teacher = models.ForeignKey(Faculty, on_delete=models.SET_NULL, null=True, blank=True)
     subject = models.ForeignKey(Subject, on_delete=models.SET_NULL, null=True, blank=True)
 
+
+
     def __str__(self):
         return f"{self.semester.sem_name} - Day {self.day}, Hour {self.hour}  - {self.teacher.name}"
 

@@ -437,6 +437,7 @@ class student_reg(GenericAPIView):
 
 
 
+
 class login_view(GenericAPIView):
     serializer_class=LoginSerializer
 

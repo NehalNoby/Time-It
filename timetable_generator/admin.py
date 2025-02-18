@@ -9,7 +9,7 @@ from.models import Subject
 from.models import AdminSettings
 from.models import SubjectTypeChoice
 from.models import Number_of_hour
-from.models import Schedule
+from.models import TimeTable
 # Register your models here.
 admin.site.register(Faculty)
 admin.site.register(Student)
@@ -21,4 +21,4 @@ admin.site.register(Subject)
 admin.site.register(AdminSettings)
 admin.site.register(SubjectTypeChoice)
 admin.site.register(Number_of_hour)
-admin.site.register(Schedule)
+admin.site.register(TimeTable)

@@ -63,6 +63,7 @@ urlpatterns = [
 
     # Existing Generate Timetable URL
     path('generate-timetable/', views.GenerateTimeTableAPIView.as_view()),
+    path('generate-timetable-student/', views.GenerateTimeTableStudentAPIView.as_view()),
     path('generate-teacher-timetable/', views.TeacherTimeTableAPIView.as_view(), name='generate_teacher_timetable'),
 
 

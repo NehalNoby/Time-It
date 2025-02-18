@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Student,Login,Faculty,Department,Semester,Subject,AdminSettings,College,SubjectTypeChoice,Number_of_hour,Schedule
+from .models import Student,Login,Faculty,Department,Semester,Subject,AdminSettings,College,SubjectTypeChoice,Number_of_hour,TimeTable
 
 
 class StudentSerializer(serializers.ModelSerializer):
@@ -54,7 +54,7 @@ class NumberofhourSerializer(serializers.ModelSerializer):
         model=Number_of_hour
         fields='__all__'
 
-class ScheduleSerializer(serializers.ModelSerializer):
+class TimeTableSerializer(serializers.ModelSerializer):
     class Meta:
-        model=Schedule
+        model=TimeTable
         fields='__all__'

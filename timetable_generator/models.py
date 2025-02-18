@@ -111,18 +111,10 @@ class Student(models.Model):
         return self.name
 
 
-class Schedule(models.Model):
-    semester = models.ForeignKey(Semester, on_delete=models.CASCADE)
-    day = models.IntegerField()  # Day of the week (1-5)
-    hour = models.IntegerField()  # Hour of the day (1-5)
-    subject_type = models.ForeignKey(SubjectTypeChoice, on_delete=models.SET_NULL, null=True, blank=True)
-    teacher = models.ForeignKey(Faculty, on_delete=models.SET_NULL, null=True, blank=True)
-    subject = models.ForeignKey(Subject, on_delete=models.SET_NULL, null=True, blank=True)
+class TimeTable(models.Model):
+    year=models.IntegerField(default=2025)
+    timetable_data = models.JSONField()
 
-
-
-    def __str__(self):
-        return f"{self.semester.sem_name} - Day {self.day}, Hour {self.hour}  - {self.teacher.name}"
 
 
 class AdminSettings(models.Model):

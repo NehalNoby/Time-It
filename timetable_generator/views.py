@@ -10,7 +10,7 @@ from itertools import chain
 from django.core.exceptions import ObjectDoesNotExist
 from rest_framework.views import APIView
 import json
-
+from .models import *
 import random
 from random import choice
 from collections import defaultdict
@@ -19,10 +19,13 @@ from django.db.models import Q
 # Create your views here.
 def index(request):
     return HttpResponse("asdfghj")
+import random
+from collections import defaultdict
 
 class GenerateTimeTableAPIView(APIView):
 
     def get(self, request):
+
         if TimeTable.objects.all().exists():
             timetable=TimeTable.objects.all().first()
             return Response({
@@ -43,28 +46,24 @@ class GenerateTimeTableAPIView(APIView):
         teacher_availability = {}
         subject_hours_map = {}
 
-        # Map subjects and allocate hours for each semester
         for semester in semesters:
             teachers_subjects_map[semester.sem_name] = defaultdict(list)
             subject_hours_map[semester.sem_name] = {}
-
             total_allocated_hours = 0
-            subject_types = SubjectTypeChoice.objects.all()
             
+            subject_types = SubjectTypeChoice.objects.all()
             for subject_type in subject_types:
                 hours_entry = Number_of_hour.objects.filter(subject_type=subject_type, semester=semester).first()
                 allocated_hours = hours_entry.no_of_hours_for_subject if hours_entry else 0
                 subject_hours_map[semester.sem_name][subject_type.subject_types] = allocated_hours
                 total_allocated_hours += allocated_hours
 
-            # Ensure total allocated hours match total available hours
             if total_allocated_hours != total_periods_per_week:
                 return Response({
                     "message": f"Mismatch: Allocated {total_allocated_hours} hours but {total_periods_per_week} required.",
                     "success": False
                 }, status=400)
 
-            # Assign teachers to subjects
             for subject in semester.available_subjects.all():
                 if subject.staff:
                     teachers_subjects_map[semester.sem_name][subject.subject_type.subject_types if subject.subject_type else "Unknown"].append({
@@ -73,9 +72,9 @@ class GenerateTimeTableAPIView(APIView):
                         "subject_code": subject.subject_code,
                         "staff_id": subject.staff.staff_id,
                         "semester": semester.sem_name,
+                        "is_fixed": subject.subject_type.is_fixed
                     })
 
-        # Initialize teacher availability for the week
         for semester in semesters:
             for subject in semester.available_subjects.all():
                 if subject.staff:
@@ -85,7 +84,6 @@ class GenerateTimeTableAPIView(APIView):
                             f"Day {day + 1}": [False] * periods_per_day for day in range(working_days)
                         }
 
-        # Generate timetable
         try:
             timetable = self.generate_timetable(
                 [semester.sem_name for semester in semesters],
@@ -98,17 +96,14 @@ class GenerateTimeTableAPIView(APIView):
         except ValueError as e:
             return Response({"message": str(e), "success": False}, status=400)
 
-        # Save timetable to database
-        TimeTable.objects.create( timetable_data=json.dumps(timetable))
-        print(type(timetable))
-
+        TimeTable.objects.create(timetable_data=json.dumps(timetable))
 
         return Response({
             "data": timetable,
             "message": "Timetable generated successfully",
             "success": True
         })
-            
+
     def generate_timetable(self, semesters, working_days, periods_per_day, teachers_subjects_map, teacher_availability, subject_hours_map):
         timetable = {}
 
@@ -117,7 +112,6 @@ class GenerateTimeTableAPIView(APIView):
             subject_hour_tracker = {k: 0 for k in subject_hours_map[semester]}
             total_hours_needed = sum(subject_hours_map[semester].values())
 
-            # Ensure that the total hours across all subject types match the total available periods
             if total_hours_needed != working_days * periods_per_day:
                 raise ValueError(f"Total hours ({total_hours_needed}) must match available periods ({working_days * periods_per_day}) for semester {semester}.")
 
@@ -138,27 +132,25 @@ class GenerateTimeTableAPIView(APIView):
 
                     while available_subjects and not assigned:
                         subject_type, subjects = random.choice(available_subjects)
-                        
-                        # Filter subjects that are available for the current semester
                         subjects_in_semester = [subject for subject in subjects if subject['semester'] == semester]
 
                         if not subjects_in_semester:
-                            continue  # Skip this subject type if none are available for the semester
+                            continue
 
-                        # Create a set to track teachers, subject codes, and staff IDs
                         combined_teachers = set()
                         combined_subjects = set()
                         staff_ids = set()
+                        is_fixed = False
 
                         for subject in subjects_in_semester:
                             combined_teachers.add(subject["teacher"])
                             combined_subjects.add(subject["subject"])
                             staff_ids.add(subject["staff_id"])
+                            is_fixed = subject["is_fixed"]
 
                         teacher_str = ", ".join(combined_teachers)
                         subject_str = ", ".join(combined_subjects)
 
-                        # Check if all teachers are available for this time slot and the subject isn't already assigned
                         if all(not teacher_availability[staff_id][f"Day {day + 1}"][period] for staff_id in staff_ids) and subject_str not in assigned_subjects_for_day:
                             for staff_id in staff_ids:
                                 teacher_availability[staff_id][f"Day {day + 1}"][period] = True
@@ -169,32 +161,32 @@ class GenerateTimeTableAPIView(APIView):
                                 "subject_code": "-",
                                 "semester": semester,
                                 "subject_type": subject_type,
+                                "is_fixed": is_fixed
                             })
                             assigned_subjects_for_day.add(subject_str)
                             subject_hour_tracker[subject_type] += 1
                             assigned = True
                         else:
-                            available_subjects.remove((subject_type, subjects))  # Try another subject if not assigned
+                            available_subjects.remove((subject_type, subjects))
 
-                    # If no subject was assigned, find the least assigned subject type and assign
                     if not assigned:
                         least_assigned = min(subject_hour_tracker, key=lambda k: subject_hour_tracker[k])
                         subjects = teachers_subjects_map[semester][least_assigned]
-
-                        # Filter subjects that are available for the current semester
                         subjects_in_semester = [subject for subject in subjects if subject['semester'] == semester]
 
                         if not subjects_in_semester:
-                            continue  # Skip if no subjects are available for the semester
+                            continue
 
                         combined_teachers = set()
                         combined_subjects = set()
                         staff_ids = set()
+                        is_fixed = False
 
                         for subject in subjects_in_semester:
                             combined_teachers.add(subject["teacher"])
                             combined_subjects.add(subject["subject"])
                             staff_ids.add(subject["staff_id"])
+                            is_fixed = subject["is_fixed"]
 
                         teacher_str = ", ".join(combined_teachers)
                         subject_str = ", ".join(combined_subjects)
@@ -208,12 +200,15 @@ class GenerateTimeTableAPIView(APIView):
                             "subject_code": "-",
                             "semester": semester,
                             "subject_type": least_assigned,
+                            "is_fixed": is_fixed
                         })
                         subject_hour_tracker[least_assigned] += 1
 
                 timetable[semester][f"Day {day + 1}"] = daily_schedule
 
         return timetable
+
+
 from rest_framework.generics import GenericAPIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -228,7 +223,7 @@ class GenerateTimeTableStudentAPIView(GenericAPIView):
         if not timetable_entry:
             return Response({'message': 'No timetable found'}, status=status.HTTP_404_NOT_FOUND)
 
-        timetable = json.loads( timetable_entry.timetable_data)
+        timetable = json.loads(timetable_entry.timetable_data)
 
         student = Student.objects.filter(id=student_id).first()
         if not student:
@@ -239,28 +234,35 @@ class GenerateTimeTableStudentAPIView(GenericAPIView):
         if semester not in timetable:
             return Response({'message': 'No timetable found for this semester'}, status=status.HTTP_404_NOT_FOUND)
 
-        student_minor_subs = student.selected_subjects.filter(
-            subject_type__subject_types__in=['minor 1', 'minor 2']
-        ).values_list('subject_name', flat=True)
+        student_selected_subs = [
+            sub.strip().lower() for sub in student.selected_subjects.values_list('subject_name', flat=True)
+        ]
 
-        for day in timetable[semester].values():
-            for item in day:
-                if item.get('subject_type') in ['minor 1', 'minor 2']:
+        print("Student's selected subjects:", student_selected_subs)
+
+        for day, schedule in timetable[semester].items():
+            for item in schedule:
+                if not item.get('is_fixed', True):  # Default to True if 'is_fixed' is not present
+                    # Parse the subject field (handle both string and list cases)
                     subject_list = item['subject'].split(',') if isinstance(item['subject'], str) else [item['subject']]
                     
+                    subject_list = [sub.strip().lower() for sub in subject_list]
+
+                    print("Subject list from timetable:", subject_list)
+
                     matched = False
                     for sub in subject_list:
-                        if sub in student_minor_subs:
-                            item['subject'] = sub
+                        if sub in student_selected_subs:
+                            print(f"Matched subject: {sub}")
+                            item['subject'] = sub  # Replace with the matched subject
                             matched = True
-                            break  
-                    
+                            break
+
                     if not matched:
-                        item['subject'] = 'Free' 
+                        item['subject'] = 'Free'
+                        print("No match found, setting subject to 'Free'")
 
         return Response({'timetable': timetable[semester]}, status=status.HTTP_200_OK)
-
-
 
 
 class TeacherTimeTableAPIView(APIView):

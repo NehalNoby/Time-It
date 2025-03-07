@@ -36,7 +36,7 @@ class GenerateTimeTableAPIView(APIView):
 
 
         settings = AdminSettings.objects.first()
-        semesters = Semester.objects.filter(department__id=7)
+        semesters = Semester.objects.all()
 
         working_days = settings.no_of_workingdays if settings else 5
         periods_per_day = settings.no_of_hours_in_a_day if settings else 5
@@ -245,7 +245,7 @@ class GenerateTimeTableStudentAPIView(GenericAPIView):
         fixed_subjects = Subject.objects.filter(
             subject_type__is_fixed=True, sem=student.semester, department=department
         )
-        fixed_subject_map = {sub.subject_code: sub.subject_name for sub in fixed_subjects}
+        fixed_subject_map = {sub.subject_type.subject_types: sub.subject_name for sub in fixed_subjects}
 
         print("Student's Department:", department)
         print("Fixed subjects for this department:", fixed_subject_map)
@@ -253,10 +253,11 @@ class GenerateTimeTableStudentAPIView(GenericAPIView):
         for day, schedule in timetable[semester].items():
             for idx, item in enumerate(schedule):
                 if item.get('is_fixed', False):  
+                    print(item,'sdf')
                     # ✅ Assign fixed subject only if it belongs to the student's department
-                    subject_code = item.get('subject')
-                    if subject_code in fixed_subject_map:
-                        item['subject'] = fixed_subject_map[subject_code]
+                    subject_type = item.get('subject_type')
+                    if subject_type in fixed_subject_map:
+                        item['subject'] = fixed_subject_map[subject_type]
                     else:
                         item['subject'] = 'Free'
 

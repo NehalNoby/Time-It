@@ -68,7 +68,7 @@ class Number_of_hour(models.Model):
 
 class Semester(models.Model):
     sem_name = models.CharField(max_length=40)
-    department = models.ForeignKey(Department, on_delete=models.SET_NULL, null=True)
+    # department = models.ForeignKey(Department, on_delete=models.SET_NULL, null=True)
     no_of_subjects = models.IntegerField(default=4)
     available_subjects = models.ManyToManyField('Subject', blank=True)
 

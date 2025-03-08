@@ -1,17 +1,22 @@
 from django.urls import path,include
 from.import views
+from.views import RequestOTPView,VerifyOTPView
 urlpatterns = [
    path('',views.index),
 
 #login
    path('login/',views.login_view.as_view()),
 
-#student
+
+
+#student\
    path('studentregistration/',views.student_reg.as_view()),
    path('viewstudents/',views.view_students.as_view()),
    path('studentlogin/<int:login_id>',views.student_login.as_view()),
    path('studentupdate/<int:login_id>',views.update_students.as_view()),
    path('studentdelete/<int:login_id>',views.student_delete.as_view()),
+   path('student_department/<int:department_id>/',views.student_filter.as_view()),
+   path('students_semester/<int:semester_id>/',views.StudentListBySemesterView.as_view(), name='students-by-semester'),
 
 #faculty
    path('facultyregistration/',views.faculty_reg.as_view()),
@@ -19,15 +24,16 @@ urlpatterns = [
    path('facultylogin/<int:login_id>',views.faculty_login.as_view()),
    path('facultyupdate/<int:login_id>',views.update_faculties.as_view()),
    path('facultydelete/<int:login_id>',views.faculty_delete.as_view()),
+   path('faculty_department/<int:department_id>/',views.faculty_filter.as_view()),
 
 
 #college
    path('collegeregistration/',views.college_reg.as_view()),
    path('viewcollege/',views.view_college.as_view()),
+   path('viewcollege/<str:code>/',views.ViewCollege.as_view(), name='view_college'),
    path('collegeupdate/<int:id>',views.update_college.as_view()),
    path('collegedelete/<int:id>',views.college_delete.as_view()),
    path('collegelogin/<int:login_id>',views.college_login.as_view()),
-
 
 #department
    path('departmentregistration/',views.department_reg.as_view()),
@@ -65,6 +71,11 @@ urlpatterns = [
     path('generate-timetable/', views.GenerateTimeTableAPIView.as_view()),
     path('generate-timetable-student/', views.GenerateTimeTableStudentAPIView.as_view()),
     path('generate-teacher-timetable/', views.TeacherTimeTableAPIView.as_view(), name='generate_teacher_timetable'),
+
+
+    # OTP Verification
+    path("request-otp/", RequestOTPView.as_view(), name="request-otp"),
+    path("verify-otp/", VerifyOTPView.as_view(), name="verify-otp"),
 
 
 

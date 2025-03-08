@@ -431,7 +431,7 @@ class student_reg(GenericAPIView):
             student = student_serializer.save()
             student.selected_subjects.add(*combined_queryset)
             student.save()
-            return Response({"message": "Registration Successful"}, status=status.HTTP_200_OK)
+            return Response({"message": "Registration Successful","data":  student_serializer.data}, status=status.HTTP_200_OK)
         else:
             l.delete()
             return Response(
@@ -448,6 +448,7 @@ class login_view(GenericAPIView):
         password=request.data.get('password')
 
         logreg=Login.objects.filter(email=email,password=password)
+        print(logreg)
         if(logreg.count()>0):
             read_serializers=LoginSerializer(logreg,many=True)
 
@@ -532,18 +533,59 @@ class student_login(GenericAPIView):
         return Response(serializerstd.data) 
 
 class update_students(GenericAPIView):
-    serializer_class=StudentSerializer
+    serializer_class = StudentSerializer
 
-    def put(self,request,login_id):
-        student=Student.objects.get(login_id=login_id)
-        serializerstd=StudentSerializer(instance=student,data=request.data,partial=True)
+    def put(self, request, login_id):
+        try:
+            # Fetch the student object
+            student = Student.objects.get(login_id=login_id)
+        except Student.DoesNotExist:
+            return Response(
+                {'message': 'Student not found', 'success': False},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Print request data for debugging
+        print(request.data)
+
+        # Deserialize the request data
+        serializerstd = StudentSerializer(instance=student, data=request.data, partial=True)
 
         if serializerstd.is_valid():
-            serializerstd.save()
-            return Response({'data':serializerstd.data,'message':'Student Updated Successfully','success':True},status=status.HTTP_200_OK)
+            # Save the updated student data
+            updated_student = serializerstd.save()
 
-        return Response(serializerstd.errors,status=status.HTTP_400_BAD_REQUEST)
+            # Handle selected_subjects
+            selected_subjects = request.data.get('selected_subjects', [])
+            if selected_subjects:
+                # Clear existing selected subjects
+                updated_student.selected_subjects.clear()
 
+                # Add new selected subjects
+                for subject_id in selected_subjects:
+                    try:
+                        subject = Subject.objects.get(id=subject_id)
+                        updated_student.selected_subjects.add(subject)
+                    except Subject.DoesNotExist:
+                        return Response(
+                            {'message': f'Subject with ID {subject_id} not found', 'success': False},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+
+            return Response(
+                {
+                    'data': serializerstd.data,
+                    'message': 'Student Updated Successfully',
+                    'success': True,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        # Return serializer errors if data is invalid
+        return Response(
+            serializerstd.errors,
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 class student_delete(GenericAPIView):
     serializer_class=StudentSerializer
 
@@ -674,7 +716,7 @@ class college_delete(GenericAPIView):
     serializer_class=CollegeSerializer
 
     def delete(self,request,id):
-        college=Colleget.objects.get(pk=id)
+        college=College.objects.get(pk=id)
         college.delete()
 
         return Response('Department deleted successfully')  
@@ -715,6 +757,19 @@ class view_departments(GenericAPIView):
 
         else:
             return Response({'data':'No data available'},status=status.HTTP_400_BAD_REQUEST)
+from .models import College
+from .serializers import CollegeSerializer
+
+class ViewCollege(GenericAPIView):
+    serializer_class = CollegeSerializer
+
+    def get(self, request, code=None):
+        try:
+            college = College.objects.get(code=code)
+            serializer = CollegeSerializer(college)
+            return Response({'data': serializer.data, 'message': 'Data fetched', 'Success': True}, status=status.HTTP_200_OK)
+        except College.DoesNotExist:
+            return Response({'data': 'No data available', 'Success': False}, status=status.HTTP_404_NOT_FOUND)
 
 class update_departments(GenericAPIView):
     serializer_class=DepartmentSerializer
@@ -797,12 +852,13 @@ class SubjectTypeChoicesRegistration(GenericAPIView):
             serializer.save()
             return Response({'message': 'Subject type added successfully', 'data': serializer.data}, status=status.HTTP_201_CREATED)
         return Response({'message': 'Failed to add subject type', 'errors': serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+from .models import SubjectTypeChoice
 
 class ViewAllSubjectTypes(GenericAPIView):
     serializer_class = SubjectTypeChoicesSerializer
 
     def get(self, request):
-        subject_types = SubjectTypeChoices.objects.all()
+        subject_types = SubjectTypeChoice.objects.all()
         if subject_types.exists():
             serializer = self.get_serializer(subject_types, many=True)
             return Response({'data': serializer.data, 'message': 'Subject types fetched successfully', 'success': True}, status=status.HTTP_200_OK)
@@ -813,8 +869,8 @@ class SubjectTypeDetailView(GenericAPIView):
 
     def get_object(self, id):
         try:
-            return SubjectTypeChoices.objects.get(pk=id)
-        except SubjectTypeChoices.DoesNotExist:
+            return SubjectTypeChoice.objects.get(pk=id)
+        except SubjectTypeChoice.DoesNotExist:
             return None
 
     def get(self, request, id):
@@ -922,34 +978,52 @@ class DeleteNumberOfHour(GenericAPIView):
         except Number_of_hour.DoesNotExist:
             return Response({'message': 'Number of hours not found'}, status=status.HTTP_404_NOT_FOUND)
 
-#managesubjects
 class subjects_reg(GenericAPIView):
     def get_serializer_class(self):
         return SubjectSerializer
 
-    def post(self,request):
+    def post(self, request):
+        subject_name = request.data.get('subject_name')
+        department_id = request.data.get('department')
+        staff_id = request.data.get('staff_id')
+        subject_type_id = request.data.get('type_id')
+        sem_id = request.data.get('sem')
+        subject_code = request.data.get('subject_code')
 
-        subject_name=request.data.get('subject_name')
-        department=request.data.get('department')
-        staff_id=request.data.get('staff_id')
-        subject_type_id=request.data.get('type_id')
-        subject_code=request.data.get('subject_code')
+        print(f"Received IDs - Department: {department_id}, Staff: {staff_id}, Subject Type: {subject_type_id}, Sem: {sem_id}")
 
-        sub_serializer=SubjectSerializer(
+        # Check if the IDs exist before assigning
+        department = Department.objects.filter(id=department_id).first() if department_id else None
+        staff = Faculty.objects.filter(id=staff_id).first() if staff_id else None
+        subject_type = SubjectTypeChoice.objects.filter(id=subject_type_id).first() if subject_type_id else None
+        sem = Semester.objects.filter(id=sem_id).first() if sem_id else None
 
-        data={
-            'subject_name':subject_name,
-            'department':department,
-            'staff_id':staff_id,
-            'subject_type':subject_type_id,
-            'subject_code':subject_code,})
+        if None in [department, staff, subject_type, sem]:
+            return Response({
+                'message': 'Invalid foreign key reference(s)',
+                'invalid_keys': {
+                    'department': department_id if not department else "Valid",
+                    'staff': staff_id if not staff else "Valid",
+                    'subject_type': subject_type_id if not subject_type else "Valid",
+                    'sem': sem_id if not sem else "Valid"
+                }
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        sub_serializer = SubjectSerializer(data={
+            'subject_name': subject_name,
+            'department': department.id if department else None,
+            'staff': staff.id if staff else None,
+            'subject_type': subject_type.id if subject_type else None,
+            'sem': sem.id if sem else None,
+            'subject_code': subject_code,
+        })
 
         if sub_serializer.is_valid():
             sub_serializer.save()
-            return Response({'message':'Subject added Successfull'},status=status.HTTP_200_OK,)
-
+            return Response({'message': 'Subject added Successfully'}, status=status.HTTP_201_CREATED)
         else:
-            return Response({'message':'Subject adding Failed'},status=status.HTTP_400_BAD_REQUEST,)                 
+            return Response({'message': 'Subject adding Failed', 'errors': sub_serializer.errors}, 
+                            status=status.HTTP_400_BAD_REQUEST)
 
 class view_subjects(GenericAPIView):
     serializer_class=SubjectSerializer
@@ -1030,3 +1104,125 @@ class adminsettings_delete(GenericAPIView):
         adminsettings.delete()
         return Response('AdminSettings deleted successfully')
 
+
+
+from django.contrib.auth.hashers import check_password
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+from rest_framework import status
+from .models import Login
+from rest_framework import generics
+
+class faculty_filter(generics.ListAPIView):
+    serializer_class = FacultySerializer
+
+    def get_queryset(self):
+        department_id = self.kwargs['department_id']
+        return Faculty.objects.filter(department_id=department_id)
+    
+from django.contrib.auth.hashers import check_password
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+from rest_framework import status
+from .models import Login
+from rest_framework import generics
+
+class student_filter(generics.ListAPIView):
+    serializer_class = StudentSerializer
+
+    def get_queryset(self):
+        department_id = self.kwargs['department_id']
+        return Student.objects.filter(department_id=department_id)
+    
+
+from django.core.mail import send_mail
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+from django.contrib.auth.models import User
+import random
+from .models import OTPVerification
+
+class RequestOTPView(APIView):
+    def post(self, request):
+        email = request.data.get("email")
+        try:
+            user = Login.objects.get(email=email)
+            otp = str(random.randint(100000, 999999))
+            OTPVerification.objects.create(user=user, otp=otp)
+
+            send_mail(
+                "Password Reset OTP",
+                f"Your OTP is: {otp}",
+                "timeit.lissah@gmail.com",  # Your email
+                [email],
+                fail_silently=False,
+            )
+
+            return Response({"message": "OTP sent to your email"}, status=status.HTTP_200_OK)
+
+        except User.DoesNotExist:
+            return Response({"error": "User with this email not found"}, status=status.HTTP_404_NOT_FOUND)
+
+
+from rest_framework.response import Response
+from rest_framework import status
+from rest_framework.views import APIView
+from django.core.exceptions import ObjectDoesNotExist
+from .models import Login, OTPVerification, Student, Faculty, College
+
+class VerifyOTPView(APIView):
+    def post(self, request):
+        email = request.data.get("email")
+        otp = request.data.get("otp")
+        new_password = request.data.get("new_password")
+
+        try:
+            # Find user in the Login model
+            user = Login.objects.get(email=email)
+            otp_entry = OTPVerification.objects.filter(user=user, otp=otp).first()
+
+            if otp_entry and otp_entry.is_valid():
+                # Update password in Login model
+                user.password = new_password
+                user.save()
+
+                # Update password in related models (Student, Faculty, College)
+                try:
+                    if Student.objects.filter(email=email).exists():
+                        student = Student.objects.get(email=email)
+                        student.password = new_password
+                        student.save()
+                    elif Faculty.objects.filter(email=email).exists():
+                        faculty = Faculty.objects.get(email=email)
+                        faculty.password = new_password
+                        faculty.save()
+                    elif College.objects.filter(email=email).exists():
+                        college = College.objects.get(email=email)
+                        college.password = new_password
+                        college.save()
+                except ObjectDoesNotExist:
+                    pass  # If no related model is found, just proceed
+
+                # Delete OTP entry after successful password change
+                otp_entry.delete()
+                return Response({"message": "Password reset successful"}, status=status.HTTP_200_OK)
+            else:
+                return Response({"error": "Invalid or expired OTP"}, status=status.HTTP_400_BAD_REQUEST)
+
+        except Login.DoesNotExist:
+            return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+        
+
+from rest_framework import generics
+from .models import Student
+from .serializers import StudentSerializer
+
+class StudentListBySemesterView(generics.ListAPIView):
+    serializer_class = StudentSerializer
+
+    def get_queryset(self):
+        semester_id = self.kwargs.get('semester_id')  # Get semester ID from URL
+        if semester_id:
+            return Student.objects.filter(semester_id=semester_id)  # Filter students
+        return Student.objects.all()  # Return all students if no filter applied

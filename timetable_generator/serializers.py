@@ -33,6 +33,17 @@ class SemesterSerializer(serializers.ModelSerializer):
     class Meta:
         model=Semester
         fields='__all__'
+        depth=2
+
+# class SemesterSerializersub(serializers.ModelSerializer):
+#     class Meta:
+#         model=Semester
+#         fields='__all__'
+#         depth=2
+
+
+
+
 
 class SubjectSerializer(serializers.ModelSerializer):
     class Meta:

@@ -33,6 +33,16 @@ urlpatterns = [
     path('collegedelete/<int:id>', views.college_delete.as_view()),
     path('collegelogin/<int:login_id>', views.college_login.as_view()),
 
+#semester
+
+   path('semesterregistration/',views.semester_reg.as_view()),
+
+   path('viewsemesters/',views.view_semesters.as_view()),
+
+   path('semesterupdate/<int:id>',views.update_semester.as_view()),
+
+   path('semesterdelete/<int:id>',views.semester_delete.as_view()),
+
 #college
    path('collegeregistration/',views.college_reg.as_view()),
    path('viewcollege/',views.view_college.as_view()),

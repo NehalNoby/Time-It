@@ -212,7 +212,8 @@ class GenerateTimeTableAPIView(APIView):
 from rest_framework.generics import GenericAPIView
 from rest_framework.response import Response
 from rest_framework import status
-from .models import TimeTable, Student
+import json
+from .models import Student, TimeTable, Subject  
 
 class GenerateTimeTableStudentAPIView(GenericAPIView):
 
@@ -230,142 +231,106 @@ class GenerateTimeTableStudentAPIView(GenericAPIView):
             return Response({'message': 'Student not found'}, status=status.HTTP_400_BAD_REQUEST)
 
         semester = student.semester.sem_name
+        department = student.department
 
         if semester not in timetable:
             return Response({'message': 'No timetable found for this semester'}, status=status.HTTP_404_NOT_FOUND)
 
+        # ✅ Fetch student's selected elective subjects
         student_selected_subs = [
             sub.strip().lower() for sub in student.selected_subjects.values_list('subject_name', flat=True)
         ]
 
-        print("Student's selected subjects:", student_selected_subs)
+        # ✅ Fetch ONLY the fixed subjects for the student's department & semester
+        fixed_subjects = Subject.objects.filter(
+            subject_type__is_fixed=True, sem=student.semester, department=department
+        )
+        fixed_subject_map = {sub.subject_type.subject_types: sub.subject_name for sub in fixed_subjects}
+
+        print("Student's Department:", department)
+        print("Fixed subjects for this department:", fixed_subject_map)
 
         for day, schedule in timetable[semester].items():
-            for item in schedule:
-                if not item.get('is_fixed', True):  # Default to True if 'is_fixed' is not present
-                    # Parse the subject field (handle both string and list cases)
-                    subject_list = item['subject'].split(',') if isinstance(item['subject'], str) else [item['subject']]
-                    
-                    subject_list = [sub.strip().lower() for sub in subject_list]
+            for idx, item in enumerate(schedule):
+                if item.get('is_fixed', False):  
+                    print(item,'sdf')
+                    # ✅ Assign fixed subject only if it belongs to the student's department
+                    subject_type = item.get('subject_type')
+                    if subject_type in fixed_subject_map:
+                        item['subject'] = fixed_subject_map[subject_type]
+                    else:
+                        item['subject'] = 'Free'
 
-                    print("Subject list from timetable:", subject_list)
+                else:  # ✅ Assign elective subjects based on student's selection
+                    subject_list = item['subject'].split(',') if isinstance(item['subject'], str) else [item['subject']]
+                    subject_list = [sub.strip().lower() for sub in subject_list]
 
                     matched = False
                     for sub in subject_list:
                         if sub in student_selected_subs:
-                            print(f"Matched subject: {sub}")
-                            item['subject'] = sub  # Replace with the matched subject
+                            item['subject'] = sub  # ✅ Assign matched elective subject
+
+                            # ✅ Extract the correct teacher from JSON based on the selected subject
+                            if 'teacher' in item:
+                                item['teacher'] = item['teacher']  # Keep the existing teacher name
+                            else:
+                                item['teacher'] = 'TBA'  # Default if no teacher found in JSON
+
                             matched = True
                             break
 
                     if not matched:
                         item['subject'] = 'Free'
-                        print("No match found, setting subject to 'Free'")
+                        item['teacher'] = 'N/A'
 
         return Response({'timetable': timetable[semester]}, status=status.HTTP_200_OK)
 
 
-class TeacherTimeTableAPIView(APIView):
+
+
+from rest_framework.generics import GenericAPIView
+from rest_framework.response import Response
+from rest_framework import status
+from django.shortcuts import get_object_or_404
+import json
+from .models import Faculty, TimeTable  # Change 'your_app' to your actual app name
+
+class TeacherTimeTableAPIView(GenericAPIView):
+    
     def get(self, request):
-        generate_timetable(departments, subjects, teachers)
-        return Response(timetable)
-    def post(self, request):
-        # Fetch admin settings for the working days and hours in a day
-        admin_settings = AdminSettings.objects.first()  # Assuming there's only one admin setting record
-        working_days = list(range(1, admin_settings.no_of_workingdays + 1))  # Convert to list of days
-        hours_per_day = admin_settings.no_of_hours_in_a_day
-        total_hours_per_week = len(working_days) * hours_per_day
+        faculty_name = request.GET.get('faculty_name')
 
-        # Fetch all subject types and their allocated hours
-        subject_types = SubjectTypeChoice.objects.all()
+        if not faculty_name:
+            return Response({'message': 'Faculty name is required'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Get all semesters and their available subjects
-        semesters = Semester.objects.all()
+        timetable_entry = TimeTable.objects.first()
+        if not timetable_entry:
+            return Response({'message': 'No timetable found'}, status=status.HTTP_404_NOT_FOUND)
 
-        # Fetch the faculty members and their availability (max hours per day and week)
-        faculties = Faculty.objects.all()
+        timetable = json.loads(timetable_entry.timetable_data)
 
-        schedule = []
-        conflicts = []
+        faculty = get_object_or_404(Faculty, name=faculty_name)
 
-        # Distribute subjects across the schedule
-        for semester in semesters:
-            # For each semester, consider only the subjects available for this semester
-            available_subjects = semester.available_subjects.all()
+        filtered_timetable = {}
 
-            for subject_type in subject_types:
-                # Get the number of hours allocated for each subject type in this semester
-                number_of_hours_entry = Number_of_hour.objects.filter(subject_type=subject_type, semester=semester).first()
+        for semester, schedule in timetable.items():
+            for day, slots in schedule.items():
+                for hour, item in enumerate(slots, start=1):  # Assigns the correct hour order
+                    if 'teacher' in item and item['teacher'].strip().lower() == faculty.name.strip().lower():
+                        if semester not in filtered_timetable:
+                            filtered_timetable[semester] = {}
+                        if day not in filtered_timetable[semester]:
+                            filtered_timetable[semester][day] = []
 
-                if number_of_hours_entry is None:
-                    # If no record is found for this subject type and semester, handle the error
-                    conflicts.append({
-                        "message": f"No allocated hours for {subject_type.subject_types} in {semester.sem_name}",
-                        "semester": semester.sem_name,
-                        "subject_type": subject_type.subject_types
-                    })
-                    continue  # Skip this subject type and semester
+                        item_with_hour = item.copy()  # Copy the item to avoid modifying the original
+                        item_with_hour['hour'] = hour  # Assign the hour
+                        
+                        filtered_timetable[semester][day].append(item_with_hour)
 
-                number_of_hours = number_of_hours_entry.no_of_hours_for_subject
-                
-                # Filter subjects that belong to the current subject type and are in the available subjects for the semester
-                subjects = available_subjects.filter(subject_type=subject_type)
+        if not filtered_timetable:
+            return Response({'message': 'No timetable found for this faculty'}, status=status.HTTP_404_NOT_FOUND)
 
-                # Assign subjects to available hours in the schedule
-                day_index = 0
-                hour_index = 1
-                for subject in subjects:
-                    if number_of_hours > 0:
-                        # Check if this subject can be scheduled at the current hour and day
-                        if hour_index > hours_per_day:
-                            day_index += 1
-                            hour_index = 1
-                        if day_index >= len(working_days):  # Ensure we don't go out of working days
-                            break
-
-                        # Check for faculty availability (no conflicts in time slots)
-                        faculty = subject.staff
-                        conflicting_schedule = Schedule.objects.filter(
-                            Q(teacher=faculty) & Q(day=working_days[day_index]) & Q(hour=hour_index)
-                        )
-
-                        # Also check for conflicts in other semesters for this teacher
-                        semester_conflicts = Schedule.objects.filter(
-                            Q(teacher=faculty) & Q(hour=hour_index) & ~Q(semester=semester)
-                        )
-
-                        if conflicting_schedule.exists() or semester_conflicts.exists():
-                            conflicts.append({
-                                "day": working_days[day_index],
-                                "hour": hour_index,
-                                "teacher": faculty.name,
-                                "subject": subject.subject_name
-                            })
-                        else:
-                            # Assign the subject to this time slot
-                            Schedule.objects.create(
-                                semester=semester,
-                                day=working_days[day_index],
-                                hour=hour_index,
-                                subject_type=subject_type,
-                                teacher=faculty
-                            )
-                            schedule.append({
-                                "semester": semester.sem_name,
-                                "day": working_days[day_index],
-                                "hour": hour_index,
-                                "subject_type": subject_type.subject_types,
-                                "teacher": faculty.name,
-                                "subject": subject.subject_name
-                            })
-
-                        hour_index += 1
-                        number_of_hours -= 1
-
-        return Response({
-            "schedule": schedule,
-            "conflicts": conflicts
-        })
+        return Response({'timetable': filtered_timetable}, status=status.HTTP_200_OK)
 
 
 
@@ -431,7 +396,7 @@ class student_reg(GenericAPIView):
             student = student_serializer.save()
             student.selected_subjects.add(*combined_queryset)
             student.save()
-            return Response({"message": "Registration Successful"}, status=status.HTTP_200_OK)
+            return Response({"message": "Registration Successful","data":  student_serializer.data}, status=status.HTTP_200_OK)
         else:
             l.delete()
             return Response(
@@ -448,6 +413,7 @@ class login_view(GenericAPIView):
         password=request.data.get('password')
 
         logreg=Login.objects.filter(email=email,password=password)
+        print(logreg)
         if(logreg.count()>0):
             read_serializers=LoginSerializer(logreg,many=True)
 
@@ -532,18 +498,59 @@ class student_login(GenericAPIView):
         return Response(serializerstd.data) 
 
 class update_students(GenericAPIView):
-    serializer_class=StudentSerializer
+    serializer_class = StudentSerializer
 
-    def put(self,request,login_id):
-        student=Student.objects.get(login_id=login_id)
-        serializerstd=StudentSerializer(instance=student,data=request.data,partial=True)
+    def put(self, request, login_id):
+        try:
+            # Fetch the student object
+            student = Student.objects.get(login_id=login_id)
+        except Student.DoesNotExist:
+            return Response(
+                {'message': 'Student not found', 'success': False},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Print request data for debugging
+        print(request.data)
+
+        # Deserialize the request data
+        serializerstd = StudentSerializer(instance=student, data=request.data, partial=True)
 
         if serializerstd.is_valid():
-            serializerstd.save()
-            return Response({'data':serializerstd.data,'message':'Student Updated Successfully','success':True},status=status.HTTP_200_OK)
+            # Save the updated student data
+            updated_student = serializerstd.save()
 
-        return Response(serializerstd.errors,status=status.HTTP_400_BAD_REQUEST)
+            # Handle selected_subjects
+            selected_subjects = request.data.get('selected_subjects', [])
+            if selected_subjects:
+                # Clear existing selected subjects
+                updated_student.selected_subjects.clear()
 
+                # Add new selected subjects
+                for subject_id in selected_subjects:
+                    try:
+                        subject = Subject.objects.get(id=subject_id)
+                        updated_student.selected_subjects.add(subject)
+                    except Subject.DoesNotExist:
+                        return Response(
+                            {'message': f'Subject with ID {subject_id} not found', 'success': False},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+
+            return Response(
+                {
+                    'data': serializerstd.data,
+                    'message': 'Student Updated Successfully',
+                    'success': True,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        # Return serializer errors if data is invalid
+        return Response(
+            serializerstd.errors,
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 class student_delete(GenericAPIView):
     serializer_class=StudentSerializer
 
@@ -674,7 +681,7 @@ class college_delete(GenericAPIView):
     serializer_class=CollegeSerializer
 
     def delete(self,request,id):
-        college=Colleget.objects.get(pk=id)
+        college=College.objects.get(pk=id)
         college.delete()
 
         return Response('Department deleted successfully')  
@@ -715,6 +722,19 @@ class view_departments(GenericAPIView):
 
         else:
             return Response({'data':'No data available'},status=status.HTTP_400_BAD_REQUEST)
+from .models import College
+from .serializers import CollegeSerializer
+
+class ViewCollege(GenericAPIView):
+    serializer_class = CollegeSerializer
+
+    def get(self, request, code=None):
+        try:
+            college = College.objects.get(code=code)
+            serializer = CollegeSerializer(college)
+            return Response({'data': serializer.data, 'message': 'Data fetched', 'Success': True}, status=status.HTTP_200_OK)
+        except College.DoesNotExist:
+            return Response({'data': 'No data available', 'Success': False}, status=status.HTTP_404_NOT_FOUND)
 
 class update_departments(GenericAPIView):
     serializer_class=DepartmentSerializer
@@ -797,12 +817,13 @@ class SubjectTypeChoicesRegistration(GenericAPIView):
             serializer.save()
             return Response({'message': 'Subject type added successfully', 'data': serializer.data}, status=status.HTTP_201_CREATED)
         return Response({'message': 'Failed to add subject type', 'errors': serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+from .models import SubjectTypeChoice
 
 class ViewAllSubjectTypes(GenericAPIView):
     serializer_class = SubjectTypeChoicesSerializer
 
     def get(self, request):
-        subject_types = SubjectTypeChoices.objects.all()
+        subject_types = SubjectTypeChoice.objects.all()
         if subject_types.exists():
             serializer = self.get_serializer(subject_types, many=True)
             return Response({'data': serializer.data, 'message': 'Subject types fetched successfully', 'success': True}, status=status.HTTP_200_OK)
@@ -813,8 +834,8 @@ class SubjectTypeDetailView(GenericAPIView):
 
     def get_object(self, id):
         try:
-            return SubjectTypeChoices.objects.get(pk=id)
-        except SubjectTypeChoices.DoesNotExist:
+            return SubjectTypeChoice.objects.get(pk=id)
+        except SubjectTypeChoice.DoesNotExist:
             return None
 
     def get(self, request, id):
@@ -922,34 +943,52 @@ class DeleteNumberOfHour(GenericAPIView):
         except Number_of_hour.DoesNotExist:
             return Response({'message': 'Number of hours not found'}, status=status.HTTP_404_NOT_FOUND)
 
-#managesubjects
 class subjects_reg(GenericAPIView):
     def get_serializer_class(self):
         return SubjectSerializer
 
-    def post(self,request):
+    def post(self, request):
+        subject_name = request.data.get('subject_name')
+        department_id = request.data.get('department')
+        staff_id = request.data.get('staff_id')
+        subject_type_id = request.data.get('type_id')
+        sem_id = request.data.get('sem')
+        subject_code = request.data.get('subject_code')
 
-        subject_name=request.data.get('subject_name')
-        department=request.data.get('department')
-        staff_id=request.data.get('staff_id')
-        subject_type_id=request.data.get('type_id')
-        subject_code=request.data.get('subject_code')
+        print(f"Received IDs - Department: {department_id}, Staff: {staff_id}, Subject Type: {subject_type_id}, Sem: {sem_id}")
 
-        sub_serializer=SubjectSerializer(
+        # Check if the IDs exist before assigning
+        department = Department.objects.filter(id=department_id).first() if department_id else None
+        staff = Faculty.objects.filter(id=staff_id).first() if staff_id else None
+        subject_type = SubjectTypeChoice.objects.filter(id=subject_type_id).first() if subject_type_id else None
+        sem = Semester.objects.filter(id=sem_id).first() if sem_id else None
 
-        data={
-            'subject_name':subject_name,
-            'department':department,
-            'staff_id':staff_id,
-            'subject_type':subject_type_id,
-            'subject_code':subject_code,})
+        if None in [department, staff, subject_type, sem]:
+            return Response({
+                'message': 'Invalid foreign key reference(s)',
+                'invalid_keys': {
+                    'department': department_id if not department else "Valid",
+                    'staff': staff_id if not staff else "Valid",
+                    'subject_type': subject_type_id if not subject_type else "Valid",
+                    'sem': sem_id if not sem else "Valid"
+                }
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        sub_serializer = SubjectSerializer(data={
+            'subject_name': subject_name,
+            'department': department.id if department else None,
+            'staff': staff.id if staff else None,
+            'subject_type': subject_type.id if subject_type else None,
+            'sem': sem.id if sem else None,
+            'subject_code': subject_code,
+        })
 
         if sub_serializer.is_valid():
             sub_serializer.save()
-            return Response({'message':'Subject added Successfull'},status=status.HTTP_200_OK,)
-
+            return Response({'message': 'Subject added Successfully'}, status=status.HTTP_201_CREATED)
         else:
-            return Response({'message':'Subject adding Failed'},status=status.HTTP_400_BAD_REQUEST,)                 
+            return Response({'message': 'Subject adding Failed', 'errors': sub_serializer.errors}, 
+                            status=status.HTTP_400_BAD_REQUEST)
 
 class view_subjects(GenericAPIView):
     serializer_class=SubjectSerializer
@@ -1030,3 +1069,125 @@ class adminsettings_delete(GenericAPIView):
         adminsettings.delete()
         return Response('AdminSettings deleted successfully')
 
+
+
+from django.contrib.auth.hashers import check_password
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+from rest_framework import status
+from .models import Login
+from rest_framework import generics
+
+class faculty_filter(generics.ListAPIView):
+    serializer_class = FacultySerializer
+
+    def get_queryset(self):
+        department_id = self.kwargs['department_id']
+        return Faculty.objects.filter(department_id=department_id)
+    
+from django.contrib.auth.hashers import check_password
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+from rest_framework import status
+from .models import Login
+from rest_framework import generics
+
+class student_filter(generics.ListAPIView):
+    serializer_class = StudentSerializer
+
+    def get_queryset(self):
+        department_id = self.kwargs['department_id']
+        return Student.objects.filter(department_id=department_id)
+    
+
+from django.core.mail import send_mail
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+from django.contrib.auth.models import User
+import random
+from .models import OTPVerification
+
+class RequestOTPView(APIView):
+    def post(self, request):
+        email = request.data.get("email")
+        try:
+            user = Login.objects.get(email=email)
+            otp = str(random.randint(100000, 999999))
+            OTPVerification.objects.create(user=user, otp=otp)
+
+            send_mail(
+                "Password Reset OTP",
+                f"Your OTP is: {otp}",
+                "timeit.lissah@gmail.com",  # Your email
+                [email],
+                fail_silently=False,
+            )
+
+            return Response({"message": "OTP sent to your email"}, status=status.HTTP_200_OK)
+
+        except User.DoesNotExist:
+            return Response({"error": "User with this email not found"}, status=status.HTTP_404_NOT_FOUND)
+
+
+from rest_framework.response import Response
+from rest_framework import status
+from rest_framework.views import APIView
+from django.core.exceptions import ObjectDoesNotExist
+from .models import Login, OTPVerification, Student, Faculty, College
+
+class VerifyOTPView(APIView):
+    def post(self, request):
+        email = request.data.get("email")
+        otp = request.data.get("otp")
+        new_password = request.data.get("new_password")
+
+        try:
+            # Find user in the Login model
+            user = Login.objects.get(email=email)
+            otp_entry = OTPVerification.objects.filter(user=user, otp=otp).first()
+
+            if otp_entry and otp_entry.is_valid():
+                # Update password in Login model
+                user.password = new_password
+                user.save()
+
+                # Update password in related models (Student, Faculty, College)
+                try:
+                    if Student.objects.filter(email=email).exists():
+                        student = Student.objects.get(email=email)
+                        student.password = new_password
+                        student.save()
+                    elif Faculty.objects.filter(email=email).exists():
+                        faculty = Faculty.objects.get(email=email)
+                        faculty.password = new_password
+                        faculty.save()
+                    elif College.objects.filter(email=email).exists():
+                        college = College.objects.get(email=email)
+                        college.password = new_password
+                        college.save()
+                except ObjectDoesNotExist:
+                    pass  # If no related model is found, just proceed
+
+                # Delete OTP entry after successful password change
+                otp_entry.delete()
+                return Response({"message": "Password reset successful"}, status=status.HTTP_200_OK)
+            else:
+                return Response({"error": "Invalid or expired OTP"}, status=status.HTTP_400_BAD_REQUEST)
+
+        except Login.DoesNotExist:
+            return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+        
+
+from rest_framework import generics
+from .models import Student
+from .serializers import StudentSerializer
+
+class StudentListBySemesterView(generics.ListAPIView):
+    serializer_class = StudentSerializer
+
+    def get_queryset(self):
+        semester_id = self.kwargs.get('semester_id')  # Get semester ID from URL
+        if semester_id:
+            return Student.objects.filter(semester_id=semester_id)  # Filter students
+        return Student.objects.all()  # Return all students if no filter applied

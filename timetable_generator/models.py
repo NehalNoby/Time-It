@@ -68,7 +68,7 @@ class Number_of_hour(models.Model):
 
 class Semester(models.Model):
     sem_name = models.CharField(max_length=40)
-    department = models.ForeignKey(Department, on_delete=models.SET_NULL, null=True)
+    # department = models.ForeignKey(Department, on_delete=models.SET_NULL, null=True)
     no_of_subjects = models.IntegerField(default=4)
     available_subjects = models.ManyToManyField('Subject', blank=True)
 
@@ -134,6 +134,15 @@ class OTPVerification(models.Model):
         return (now() - self.created_at).seconds < 300  # OTP expires after 5 minutes
 
 
+from django.db import models
+from django.utils.timezone import now
+from .models import Login  # Import Login model
 
+class OTPVerification(models.Model):
+    user = models.ForeignKey(Login, on_delete=models.CASCADE,null=True,blank=True)  # Change User → Login
+    otp = models.CharField(max_length=6)
+    created_at = models.DateTimeField(default=now)
 
+    def is_valid(self):
+        return (now() - self.created_at).seconds < 300  # OTP expires after 5 minutes
 

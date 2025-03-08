@@ -55,7 +55,7 @@ class Subject(models.Model):
 
 
     def __str__(self):
-        return f"{self.department.dept_name if self.department else ''}-{self.subject_name} -{self.subject_type}" 
+        return f"{self.department.dept_name if self.department else ''}-{self.subject_name} -{self.subject_type} -- {self.sem.sem_name if self.sem else ''}" 
 
 class Number_of_hour(models.Model):
     subject_type = models.ForeignKey(SubjectTypeChoice, on_delete=models.CASCADE, null=True, blank=True)

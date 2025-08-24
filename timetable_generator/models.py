@@ -21,6 +21,9 @@ class Login(models.Model):
     password=models.CharField(max_length=40)
     role=models.CharField(max_length=40,choices=RoleChoices.choices)
 
+    def __str__(self):
+        return f"{self.email} - {self.role}"
+
 
 class College(models.Model):
     name = models.CharField(max_length=100, unique=True)
@@ -55,7 +58,7 @@ class Subject(models.Model):
 
 
     def __str__(self):
-        return f"{self.department.dept_name if self.department else ''}-{self.subject_name} -{self.subject_type} -- {self.sem.sem_name if self.sem else ''}" 
+        return f"{self.department.dept_name if self.department else ''}-{self.subject_name} -{self.subject_type} -- {self.sem.sem_name if self.sem else ''} -{self.staff.name if self.staff else ''}" 
 
 class Number_of_hour(models.Model):
     subject_type = models.ForeignKey(SubjectTypeChoice, on_delete=models.CASCADE, null=True, blank=True)
@@ -99,6 +102,7 @@ class Faculty(models.Model):
 class Student(models.Model):
     name = models.CharField(max_length=40)
     email = models.EmailField(unique=True)
+    student_id=models.CharField(max_length=40,default="1234")
     semester = models.ForeignKey('Semester', on_delete=models.SET_NULL, null=True)
     password = models.CharField(max_length=40)
     department = models.ForeignKey(Department, on_delete=models.SET_NULL, null=True)

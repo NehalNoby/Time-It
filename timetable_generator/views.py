@@ -21,23 +21,23 @@ def index(request):
     return HttpResponse("asdfghj")
 import random
 from collections import defaultdict
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from django.db.models import Q
+import json
 
 class GenerateTimeTableAPIView(APIView):
-
     def get(self, request):
-
-        if TimeTable.objects.all().exists():
-            timetable=TimeTable.objects.all().first()
+        if TimeTable.objects.exists():
+            timetable = TimeTable.objects.first()
             return Response({
                 "message": "Timetable already exists",
                 "success": False,
-                'time_table':json.loads(timetable.timetable_data)
+                'time_table': json.loads(timetable.timetable_data)
             }, status=400)
-
 
         settings = AdminSettings.objects.first()
         semesters = Semester.objects.all()
-
         working_days = settings.no_of_workingdays if settings else 5
         periods_per_day = settings.no_of_hours_in_a_day if settings else 5
         total_periods_per_week = working_days * periods_per_day
@@ -47,35 +47,42 @@ class GenerateTimeTableAPIView(APIView):
         subject_hours_map = {}
 
         for semester in semesters:
-            teachers_subjects_map[semester.sem_name] = defaultdict(list)
-            subject_hours_map[semester.sem_name] = {}
+            sem_name = semester.sem_name
+            teachers_subjects_map[sem_name] = defaultdict(list)
+            subject_hours_map[sem_name] = {}
             total_allocated_hours = 0
-            
-            subject_types = SubjectTypeChoice.objects.all()
-            for subject_type in subject_types:
-                hours_entry = Number_of_hour.objects.filter(subject_type=subject_type, semester=semester).first()
+
+            unique_subject_types = set()
+            for subject in semester.available_subjects.all():
+                if subject.subject_type:
+                    unique_subject_types.add(subject.subject_type)
+
+            for subject_type in unique_subject_types:
+                hours_entry = Number_of_hour.objects.filter(
+                    subject_type=subject_type, semester=semester
+                ).first()
                 allocated_hours = hours_entry.no_of_hours_for_subject if hours_entry else 0
-                subject_hours_map[semester.sem_name][subject_type.subject_types] = allocated_hours
+                subject_hours_map[sem_name][subject_type.subject_types] = allocated_hours
                 total_allocated_hours += allocated_hours
 
             if total_allocated_hours != total_periods_per_week:
                 return Response({
-                    "message": f"Mismatch: Allocated {total_allocated_hours} hours but {total_periods_per_week} required.",
+                    "message": f"Mismatch in {sem_name}: Allocated {total_allocated_hours} vs required {total_periods_per_week}",
                     "success": False
                 }, status=400)
 
             for subject in semester.available_subjects.all():
                 if subject.staff:
-                    teachers_subjects_map[semester.sem_name][subject.subject_type.subject_types if subject.subject_type else "Unknown"].append({
+                    subject_type = subject.subject_type.subject_types if subject.subject_type else "Unknown"
+                    teachers_subjects_map[sem_name][subject_type].append({
                         "teacher": subject.staff.name,
                         "subject": subject.subject_name,
                         "subject_code": subject.subject_code,
                         "staff_id": subject.staff.staff_id,
-                        "semester": semester.sem_name,
-                        "is_fixed": subject.subject_type.is_fixed
+                        "semester": sem_name,
+                        "is_fixed": subject.subject_type.is_fixed if subject.subject_type else False
                     })
 
-        for semester in semesters:
             for subject in semester.available_subjects.all():
                 if subject.staff:
                     staff_id = subject.staff.staff_id
@@ -86,7 +93,7 @@ class GenerateTimeTableAPIView(APIView):
 
         try:
             timetable = self.generate_timetable(
-                [semester.sem_name for semester in semesters],
+                [sem.sem_name for sem in semesters],
                 working_days,
                 periods_per_day,
                 teachers_subjects_map,
@@ -97,7 +104,6 @@ class GenerateTimeTableAPIView(APIView):
             return Response({"message": str(e), "success": False}, status=400)
 
         TimeTable.objects.create(timetable_data=json.dumps(timetable))
-
         return Response({
             "data": timetable,
             "message": "Timetable generated successfully",
@@ -106,114 +112,84 @@ class GenerateTimeTableAPIView(APIView):
 
     def generate_timetable(self, semesters, working_days, periods_per_day, teachers_subjects_map, teacher_availability, subject_hours_map):
         timetable = {}
+        max_classes_per_teacher_per_day = 4  # Limit for max hours per teacher per day
+        
+        global_teacher_schedule = {
+            staff_id: {f"Day {day + 1}": [False] * periods_per_day for day in range(working_days)}
+            for semester in semesters
+            for subject_type, subjects in teachers_subjects_map[semester].items()
+            for sub in subjects
+            for staff_id in [sub['staff_id']]
+        }
 
         for semester in semesters:
             timetable[semester] = {}
             subject_hour_tracker = {k: 0 for k in subject_hours_map[semester]}
-            total_hours_needed = sum(subject_hours_map[semester].values())
-
-            if total_hours_needed != working_days * periods_per_day:
-                raise ValueError(f"Total hours ({total_hours_needed}) must match available periods ({working_days * periods_per_day}) for semester {semester}.")
-
+            
             for day in range(working_days):
                 daily_schedule = []
                 assigned_subjects_for_day = set()
+                teacher_daily_hours = defaultdict(int)  # Track periods per teacher per day
 
                 for period in range(periods_per_day):
                     assigned = False
-                    available_subjects = sorted(
-                        [
-                            (subject_type, subjects) for subject_type, subjects in teachers_subjects_map.get(semester, {}).items()
-                            if subject_hour_tracker[subject_type] < subject_hours_map[semester][subject_type]
-                        ],
+                    available_subjects = [
+                        (stype, subs) for stype, subs in teachers_subjects_map[semester].items()
+                        if subject_hour_tracker[stype] < subject_hours_map[semester][stype]
+                    ]
+                    random.shuffle(available_subjects)
+                    available_subjects.sort(
                         key=lambda x: subject_hours_map[semester][x[0]] - subject_hour_tracker[x[0]],
                         reverse=True
                     )
 
-                    while available_subjects and not assigned:
-                        subject_type, subjects = random.choice(available_subjects)
-                        subjects_in_semester = [subject for subject in subjects if subject['semester'] == semester]
-
-                        if not subjects_in_semester:
+                    for subject_type, subjects in available_subjects.copy():
+                        subjects_in_sem = [sub for sub in subjects if sub['semester'] == semester]
+                        if not subjects_in_sem:
                             continue
+                        staff_ids = {sub['staff_id'] for sub in subjects_in_sem}
 
-                        combined_teachers = set()
-                        combined_subjects = set()
-                        staff_ids = set()
-                        is_fixed = False
-
-                        for subject in subjects_in_semester:
-                            combined_teachers.add(subject["teacher"])
-                            combined_subjects.add(subject["subject"])
-                            staff_ids.add(subject["staff_id"])
-                            is_fixed = subject["is_fixed"]
-
-                        teacher_str = ", ".join(combined_teachers)
-                        subject_str = ", ".join(combined_subjects)
-
-                        if all(not teacher_availability[staff_id][f"Day {day + 1}"][period] for staff_id in staff_ids) and subject_str not in assigned_subjects_for_day:
-                            for staff_id in staff_ids:
-                                teacher_availability[staff_id][f"Day {day + 1}"][period] = True
-
+                        if all(
+                            not teacher_availability[sid][f"Day {day + 1}"][period] and 
+                            not global_teacher_schedule[sid][f"Day {day + 1}"][period] and 
+                            teacher_daily_hours[sid] < max_classes_per_teacher_per_day
+                            for sid in staff_ids
+                        ):
+                            subject_str = ", ".join({sub['subject'] for sub in subjects_in_sem})
+                            for sid in staff_ids:
+                                teacher_availability[sid][f"Day {day + 1}"][period] = True
+                                global_teacher_schedule[sid][f"Day {day + 1}"][period] = True
+                                teacher_daily_hours[sid] += 1
                             daily_schedule.append({
-                                "teacher": teacher_str,
+                                "teacher": ", ".join({sub['teacher'] for sub in subjects_in_sem}),
+                                "staff_id": ", ".join({str(sub['staff_id']) for sub in subjects_in_sem}),
                                 "subject": subject_str,
                                 "subject_code": "-",
                                 "semester": semester,
                                 "subject_type": subject_type,
-                                "is_fixed": is_fixed
+                                "is_fixed": subjects_in_sem[0]['is_fixed']
                             })
                             assigned_subjects_for_day.add(subject_str)
                             subject_hour_tracker[subject_type] += 1
                             assigned = True
-                        else:
-                            available_subjects.remove((subject_type, subjects))
-
-                    if not assigned:
-                        least_assigned = min(subject_hour_tracker, key=lambda k: subject_hour_tracker[k])
-                        subjects = teachers_subjects_map[semester][least_assigned]
-                        subjects_in_semester = [subject for subject in subjects if subject['semester'] == semester]
-
-                        if not subjects_in_semester:
-                            continue
-
-                        combined_teachers = set()
-                        combined_subjects = set()
-                        staff_ids = set()
-                        is_fixed = False
-
-                        for subject in subjects_in_semester:
-                            combined_teachers.add(subject["teacher"])
-                            combined_subjects.add(subject["subject"])
-                            staff_ids.add(subject["staff_id"])
-                            is_fixed = subject["is_fixed"]
-
-                        teacher_str = ", ".join(combined_teachers)
-                        subject_str = ", ".join(combined_subjects)
-
-                        for staff_id in staff_ids:
-                            teacher_availability[staff_id][f"Day {day + 1}"][period] = True
-
-                        daily_schedule.append({
-                            "teacher": teacher_str,
-                            "subject": subject_str,
-                            "subject_code": "-",
-                            "semester": semester,
-                            "subject_type": least_assigned,
-                            "is_fixed": is_fixed
-                        })
-                        subject_hour_tracker[least_assigned] += 1
-
+                            break
+                
                 timetable[semester][f"Day {day + 1}"] = daily_schedule
-
+        
         return timetable
+
+
+
+
+
+
 
 
 from rest_framework.generics import GenericAPIView
 from rest_framework.response import Response
 from rest_framework import status
 import json
-from .models import Student, TimeTable, Subject  
+from .models import Student, TimeTable, Subject
 
 class GenerateTimeTableStudentAPIView(GenericAPIView):
 
@@ -237,54 +213,51 @@ class GenerateTimeTableStudentAPIView(GenericAPIView):
             return Response({'message': 'No timetable found for this semester'}, status=status.HTTP_404_NOT_FOUND)
 
         # ✅ Fetch student's selected elective subjects
-        student_selected_subs = [
-            sub.strip().lower() for sub in student.selected_subjects.values_list('subject_name', flat=True)
-        ]
+        student_selected_subs = {
+            sub.subject_name.strip().lower(): sub.staff.name  
+            for sub in student.selected_subjects.all() if sub.staff
+        }
 
-        # ✅ Fetch ONLY the fixed subjects for the student's department & semester
+        # ✅ Fetch only fixed subjects for the student's department & semester
         fixed_subjects = Subject.objects.filter(
             subject_type__is_fixed=True, sem=student.semester, department=department
         )
-        fixed_subject_map = {sub.subject_type.subject_types: sub.subject_name for sub in fixed_subjects}
+        fixed_subject_map = {sub.subject_type.subject_types: (sub.subject_name, sub.staff.name if sub.staff else "TBA") for sub in fixed_subjects}
 
-        print("Student's Department:", department)
-        print("Fixed subjects for this department:", fixed_subject_map)
+        filtered_timetable = {}
 
         for day, schedule in timetable[semester].items():
-            for idx, item in enumerate(schedule):
+            filtered_timetable[day] = []
+            for item in schedule:
+                new_entry = item.copy()
+
                 if item.get('is_fixed', False):  
-                    print(item,'sdf')
                     # ✅ Assign fixed subject only if it belongs to the student's department
                     subject_type = item.get('subject_type')
                     if subject_type in fixed_subject_map:
-                        item['subject'] = fixed_subject_map[subject_type]
+                        new_entry['subject'], new_entry['teacher'] = fixed_subject_map[subject_type]
                     else:
-                        item['subject'] = 'Free'
+                        new_entry['subject'], new_entry['teacher'] = 'Free', 'N/A'
 
-                else:  # ✅ Assign elective subjects based on student's selection
+                else:  
+                    # ✅ Assign elective subjects based on student's selection
                     subject_list = item['subject'].split(',') if isinstance(item['subject'], str) else [item['subject']]
                     subject_list = [sub.strip().lower() for sub in subject_list]
 
                     matched = False
                     for sub in subject_list:
                         if sub in student_selected_subs:
-                            item['subject'] = sub  # ✅ Assign matched elective subject
-
-                            # ✅ Extract the correct teacher from JSON based on the selected subject
-                            if 'teacher' in item:
-                                item['teacher'] = item['teacher']  # Keep the existing teacher name
-                            else:
-                                item['teacher'] = 'TBA'  # Default if no teacher found in JSON
-
+                            new_entry['subject'] = sub.capitalize()  
+                            new_entry['teacher'] = student_selected_subs[sub]  
                             matched = True
                             break
 
                     if not matched:
-                        item['subject'] = 'Free'
-                        item['teacher'] = 'N/A'
+                        new_entry['subject'], new_entry['teacher'] = 'Free', 'N/A'
 
-        return Response({'timetable': timetable[semester]}, status=status.HTTP_200_OK)
+                filtered_timetable[day].append(new_entry)
 
+        return Response({'timetable': filtered_timetable}, status=status.HTTP_200_OK)
 
 
 
@@ -293,44 +266,59 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.shortcuts import get_object_or_404
 import json
-from .models import Faculty, TimeTable  # Change 'your_app' to your actual app name
+from .models import Faculty, TimeTable
 
 class TeacherTimeTableAPIView(GenericAPIView):
-    
-    def get(self, request):
-        faculty_name = request.GET.get('faculty_name')
 
-        if not faculty_name:
-            return Response({'message': 'Faculty name is required'}, status=status.HTTP_400_BAD_REQUEST)
+    def get(self, request):
+        staff_id = request.GET.get('staff_id')  # Fetch staff_id from request
+
+        if not staff_id:
+            return Response({'message': 'Staff ID is required'}, status=status.HTTP_400_BAD_REQUEST)
 
         timetable_entry = TimeTable.objects.first()
         if not timetable_entry:
             return Response({'message': 'No timetable found'}, status=status.HTTP_404_NOT_FOUND)
 
         timetable = json.loads(timetable_entry.timetable_data)
-
-        faculty = get_object_or_404(Faculty, name=faculty_name)
+        faculty = get_object_or_404(Faculty, staff_id=staff_id)  # Query by staff_id
 
         filtered_timetable = {}
 
         for semester, schedule in timetable.items():
             for day, slots in schedule.items():
-                for hour, item in enumerate(slots, start=1):  # Assigns the correct hour order
-                    if 'teacher' in item and item['teacher'].strip().lower() == faculty.name.strip().lower():
-                        if semester not in filtered_timetable:
-                            filtered_timetable[semester] = {}
-                        if day not in filtered_timetable[semester]:
-                            filtered_timetable[semester][day] = []
+                for hour, item in enumerate(slots, start=1):  
+                    if 'staff_id' in item and item['staff_id']:  # Ensure staff_id exists
+                        staff_ids = [t.strip().lower() for t in item['staff_id'].split(",")]
 
-                        item_with_hour = item.copy()  # Copy the item to avoid modifying the original
-                        item_with_hour['hour'] = hour  # Assign the hour
-                        
-                        filtered_timetable[semester][day].append(item_with_hour)
+                        if str(faculty.staff_id).strip().lower() in staff_ids:
+                            if semester not in filtered_timetable:
+                                filtered_timetable[semester] = {}
+                            if day not in filtered_timetable[semester]:
+                                filtered_timetable[semester][day] = []
+
+                            item_with_hour = item.copy()
+                            item_with_hour['hour'] = hour
+                            item_with_hour['teacher'] = faculty.name  # Only the requested faculty name
+                            item_with_hour['staff_id'] = faculty.staff_id  # Only the requested faculty staff_id
+
+                            # Extract only the relevant subject for this faculty
+                            subject_list = item['subject'].split(",")
+                            staff_index = staff_ids.index(str(faculty.staff_id).strip().lower())
+                            if staff_index < len(subject_list):
+                                item_with_hour['subject'] = subject_list[staff_index].strip()
+                            else:
+                                item_with_hour['subject'] = item['subject']  # Fallback
+
+                            filtered_timetable[semester][day].append(item_with_hour)
 
         if not filtered_timetable:
-            return Response({'message': 'No timetable found for this faculty'}, status=status.HTTP_404_NOT_FOUND)
+            return Response({'message': 'No timetable found for this staff ID'}, status=status.HTTP_404_NOT_FOUND)
 
         return Response({'timetable': filtered_timetable}, status=status.HTTP_200_OK)
+
+
+
 
 
 
@@ -347,13 +335,24 @@ class student_reg(GenericAPIView):
         password = request.data.get("password")
         department = request.data.get("department")
         semester = request.data.get("semester")
+        student_id = request.data.get("student_id")  # Fetch student_id from request
         role = "Student"
 
-        # Handle login
+        # Check if student ID, email, or mobile number already exists
+        if Student.objects.filter(student_id=student_id).exists():
+            return Response({"message": "Student ID already registered"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if Student.objects.filter(email=email).exists():
+            return Response({"message": "Email already registered"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if Student.objects.filter(mobile=mobile).exists():
+            return Response({"message": "Mobile number already registered"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Handle login creation
         login_serializer = LoginSerializer(data={"email": email, "password": password, "role": role})
         if login_serializer.is_valid():
-            l = login_serializer.save()
-            login_id = l.id
+            login_instance = login_serializer.save()
+            login_id = login_instance.id
         else:
             return Response(
                 {"message": "Login Failed", "error": login_serializer.errors},
@@ -368,6 +367,8 @@ class student_reg(GenericAPIView):
                 "mobile": mobile,
                 "password": password,
                 "department": department,
+                "semester": semester,
+                "student_id": student_id,
                 "role": role,
                 "login_id": login_id,
             }
@@ -396,9 +397,12 @@ class student_reg(GenericAPIView):
             student = student_serializer.save()
             student.selected_subjects.add(*combined_queryset)
             student.save()
-            return Response({"message": "Registration Successful","data":  student_serializer.data}, status=status.HTTP_200_OK)
+            return Response(
+                {"message": "Registration Successful", "data": student_serializer.data},
+                status=status.HTTP_200_OK,
+            )
         else:
-            l.delete()
+            login_instance.delete()  # Rollback login creation if student registration fails
             return Response(
                 {"message": "Registration Failed", "error": student_serializer.errors},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -406,28 +410,74 @@ class student_reg(GenericAPIView):
 
 
 class login_view(GenericAPIView):
-    serializer_class=LoginSerializer
+    serializer_class = LoginSerializer
 
-    def post(self,request):
-        email=request.data.get('email')
-        password=request.data.get('password')
+    def post(self, request):
+        email = request.data.get("email")
+        password = request.data.get("password")
 
-        logreg=Login.objects.filter(email=email,password=password)
-        print(logreg)
-        if(logreg.count()>0):
-            read_serializers=LoginSerializer(logreg,many=True)
+        logreg = Login.objects.filter(email=email, password=password).first()
 
-            for i in read_serializers.data:
-                login_id=i['id']
-                role=i['role']
+        if logreg:
+            read_serializer = LoginSerializer(logreg)
+            login_id = logreg.id
+            role = logreg.role  # Default role from Login model
+            name = None
+            department_id = None
+            department_name = None
+            student_id = None
+            is_hod = False  # Default value
 
-                register_data=Student.objects.filter(login_id=login_id).values()
-                for i in register_data:
-                    name=i['name']
+            # Check if the user is a Student
+            student = Student.objects.filter(login_id=login_id).first()
+            if student:
+                name = student.name
+                student_id = student.student_id
+                department_id = student.department.id if student.department else None  
+                department_name = student.department.dept_name if student.department else None  
+                role = "Student"  
 
-            return Response({'data':read_serializers.data,'success':1,'message':'Logged in Successfully'},status=status.HTTP_200_OK,)
-        else:
-            return Response({'message':'Login Failed'},status=status.HTTP_400_BAD_REQUEST,)
+                return Response(
+                    {
+                        "data": {**read_serializer.data, "role": role},
+                        "name": name,
+                        "department_id": department_id,
+                        "department_name": department_name,
+                        "student_id": student_id,
+                        "role": role,
+                        "success": 1,
+                        "message": "Logged in Successfully",
+                    },
+                    status=status.HTTP_200_OK,
+                )
+
+            # Check if the user is a Faculty or HOD
+            faculty = Faculty.objects.filter(login_id=login_id).first()
+            if faculty:
+                name = faculty.name
+                staff_id = faculty.staff_id
+                department_id = faculty.department.id if faculty.department else None  
+                department_name = faculty.department.dept_name if faculty.department else None  
+                is_hod = faculty.is_hod  
+                role = "HOD" if is_hod else "Faculty"  
+
+                return Response(
+                    {
+                        "data": {**read_serializer.data, "role": role},
+                        "name": name,
+                        "staff_id": staff_id,
+                        "department_id": department_id,
+                        "department_name": department_name,
+                        "role": role,
+                        "is_hod": is_hod,
+                        "success": 1,
+                        "message": "Logged in Successfully",
+                    },
+                    status=status.HTTP_200_OK,
+                )
+
+        return Response({"message": "Login Failed"}, status=status.HTTP_400_BAD_REQUEST)
+
 
 
 class faculty_reg(GenericAPIView):
@@ -1004,7 +1054,7 @@ class update_subject(GenericAPIView):
     serializer_class=SubjectSerializer
 
     def put(self,request,id):
-        subjects=Subjects.objects.get(pk=id)
+        subjects=Subject.objects.get(pk=id)
         serializersub=SubjectSerializer(instance=subjects,data=request.data,partial=True)
 
         if serializersub.is_valid():
@@ -1017,7 +1067,7 @@ class subject_delete(GenericAPIView):
     serializer_class=SubjectSerializer
 
     def delete(self,request,id):
-        subjects=Subjects.objects.get(pk=id)
+        subjects=Subject.objects.get(pk=id)
         subjects.delete()
         return Response('Subjects deleted successfully')
 
@@ -1191,3 +1241,237 @@ class StudentListBySemesterView(generics.ListAPIView):
         if semester_id:
             return Student.objects.filter(semester_id=semester_id)  # Filter students
         return Student.objects.all()  # Return all students if no filter applied
+
+
+from rest_framework.generics import GenericAPIView
+from rest_framework.response import Response
+from .models import Faculty, Subject, Student
+
+class FacultyStudentsAPIView(GenericAPIView):
+    """
+    API for faculty to view students who have chosen subjects they are teaching.
+    """
+
+    authentication_classes = []  # Removes authentication
+    permission_classes = []  # Makes API accessible to everyone
+
+    def get(self, request):
+        staff_id = request.query_params.get("staff_id")
+        if not staff_id:
+            return Response({"message": "staff_id is required", "success": False}, status=400)
+
+        try:
+            faculty = Faculty.objects.get(staff_id=staff_id)
+        except Faculty.DoesNotExist:
+            return Response({"message": "Faculty not found", "success": False}, status=404)
+
+        subjects = Subject.objects.filter(staff=faculty)
+        if not subjects.exists():
+            return Response({"message": "No subjects found for this faculty", "success": False})
+
+        result = {
+            "teacher_id": staff_id,
+            "teacher_name": faculty.name,
+            "subjects": []
+        }
+
+        for subject in subjects:
+            students = Student.objects.filter(selected_subjects=subject)
+            student_data = [
+                {
+                    "student_id": student.student_id,
+                    "name": student.name,
+                    "semester": student.semester.sem_name if student.semester else "Unknown",
+                    "department_id": student.department.id if student.department else None,
+                    "department_name": student.department.dept_name if student.department else "Unknown"
+                }
+                for student in students
+            ]
+
+            subject_entry = {
+                "subject_name": subject.subject_name,
+                "subject_code": subject.subject_code,
+                "is_fixed": subject.subject_type.is_fixed if subject.subject_type else None,
+                "students": student_data
+            }
+
+            result["subjects"].append(subject_entry)
+
+        return Response({"data": result, "success": True})
+
+
+
+from rest_framework.generics import GenericAPIView
+from rest_framework.response import Response
+from rest_framework import status
+from django.shortcuts import get_object_or_404
+import json
+from .models import Faculty, TimeTable
+
+class HoDTimeTableAPIView(GenericAPIView):
+    def get(self, request):
+        # Get HoD's staff_id from request
+        hod_staff_id = request.GET.get('staff_id')
+
+        if not hod_staff_id:
+            return Response({'message': 'HoD staff ID is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Fetch HoD details using staff_id
+        hod = get_object_or_404(Faculty, staff_id=hod_staff_id, is_hod=True)
+
+        # Get the timetable entry
+        timetable_entry = TimeTable.objects.first()
+        if not timetable_entry:
+            return Response({'message': 'No timetable found'}, status=status.HTTP_404_NOT_FOUND)
+
+        timetable_data = json.loads(timetable_entry.timetable_data)
+
+        # Fetch all faculty members in the same department
+        department_faculties = Faculty.objects.filter(department=hod.department)
+
+        hod_timetable = {}
+
+        for faculty in department_faculties:
+            faculty_timetable = {}
+
+            for semester, schedule in timetable_data.items():
+                for day, slots in schedule.items():
+                    for hour, item in enumerate(slots, start=1):
+                        if 'staff_id' in item and item['staff_id']:
+                            staff_ids = [t.strip().lower() for t in item['staff_id'].split(",")]
+
+                            if str(faculty.staff_id).strip().lower() in staff_ids:
+                                if faculty.name not in faculty_timetable:
+                                    faculty_timetable[faculty.name] = {}
+
+                                if day not in faculty_timetable[faculty.name]:
+                                    faculty_timetable[faculty.name][day] = []
+
+                                item_with_hour = item.copy()
+                                item_with_hour['hour'] = hour
+                                item_with_hour['teacher'] = faculty.name
+                                item_with_hour['staff_id'] = faculty.staff_id
+
+                                # Extract only the relevant subject for this faculty
+                                subject_list = item['subject'].split(",")
+                                staff_index = staff_ids.index(str(faculty.staff_id).strip().lower())
+                                if staff_index < len(subject_list):
+                                    item_with_hour['subject'] = subject_list[staff_index].strip()
+                                else:
+                                    item_with_hour['subject'] = item['subject']
+
+                                faculty_timetable[faculty.name][day].append(item_with_hour)
+
+            hod_timetable[faculty.name] = faculty_timetable.get(faculty.name, {})
+
+        if not hod_timetable:
+            return Response({'message': 'No timetable found for this department'}, status=status.HTTP_404_NOT_FOUND)
+
+        return Response({'timetable': hod_timetable}, status=status.HTTP_200_OK)
+
+
+
+
+from rest_framework.generics import GenericAPIView
+from rest_framework.response import Response
+from rest_framework import status
+import json
+from django.shortcuts import get_object_or_404
+from .models import Faculty, Student, TimeTable, Subject
+
+class HoDStudentTimeTableAPIView(GenericAPIView):
+    def get(self, request):
+        # Get HoD's staff_id from request
+        hod_staff_id = request.GET.get('staff_id')
+
+        if not hod_staff_id:
+            return Response({'message': 'HoD staff ID is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Fetch HoD details using staff_id
+        hod = get_object_or_404(Faculty, staff_id=hod_staff_id, is_hod=True)
+
+        # Get the timetable entry
+        timetable_entry = TimeTable.objects.first()
+        if not timetable_entry:
+            return Response({'message': 'No timetable found'}, status=status.HTTP_404_NOT_FOUND)
+
+        timetable_data = json.loads(timetable_entry.timetable_data)
+
+        # Fetch all students in the same department
+        students = Student.objects.filter(department=hod.department)
+        
+        if not students.exists():
+            return Response({'message': 'No students found in this department'}, status=status.HTTP_404_NOT_FOUND)
+
+        student_timetables = {}
+
+        for student in students:
+            semester = student.semester.sem_name if student.semester else None
+
+            if not semester or semester not in timetable_data:
+                continue  # Skip students without a valid semester or timetable data
+
+            # ✅ Fetch student's selected elective subjects (Mapping subject name → staff)
+            student_selected_subs = {
+                sub.subject_name.strip().lower(): sub.staff  
+                for sub in student.selected_subjects.all() if sub.staff
+            }
+
+            # ✅ Fetch fixed subjects for the student's department & semester
+            fixed_subjects = Subject.objects.filter(
+                subject_type__is_fixed=True, sem=student.semester, department=hod.department
+            )
+            fixed_subject_map = {
+                sub.subject_type.subject_types: (sub.subject_name, sub.staff)  
+                for sub in fixed_subjects
+            }
+
+            student_timetable = {}
+
+            for day, schedule in timetable_data[semester].items():
+                student_timetable[day] = []
+
+                for item in schedule:
+                    new_entry = item.copy()
+                    teacher = None
+                    staff_id = None
+
+                    if item.get('is_fixed', False):
+                        # ✅ Assign fixed subjects
+                        subject_type = item.get('subject_type')
+                        if subject_type in fixed_subject_map:
+                            new_entry['subject'], teacher_obj = fixed_subject_map[subject_type]
+                            if teacher_obj:
+                                teacher = teacher_obj.name
+                                staff_id = teacher_obj.staff_id
+                        else:
+                            new_entry['subject'] = 'Free'
+                    else:
+                        # ✅ Assign elective subjects based on student's selection
+                        subject_list = item['subject'].split(',') if isinstance(item['subject'], str) else [item['subject']]
+                        subject_list = [sub.strip().lower() for sub in subject_list]
+
+                        for sub in subject_list:
+                            if sub in student_selected_subs:
+                                new_entry['subject'] = sub.capitalize()
+                                teacher_obj = student_selected_subs[sub]
+                                if teacher_obj:
+                                    teacher = teacher_obj.name
+                                    staff_id = teacher_obj.staff_id
+                                break
+
+                        if not teacher:
+                            new_entry['subject'] = 'Free'
+
+                    # ✅ Update the entry with the single teacher name
+                    new_entry['teacher'] = teacher if teacher else ''
+                    new_entry['staff_id'] = staff_id if staff_id else ''
+
+                    student_timetable[day].append(new_entry)
+
+            student_timetables[student.name] = student_timetable
+
+        if not student_timetables:
+            return Response({'message': 'No timetable data available for students'}, status=status.HTTP_404_NOT_FOUND)
+
+        return Response({'timetable': student_timetables}, status=status.HTTP_200_OK)
